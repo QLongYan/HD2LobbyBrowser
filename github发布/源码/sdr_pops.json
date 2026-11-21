@@ -1,0 +1,181 @@
+{
+ "AS": [
+  {
+   "id": "hkg",
+   "desc": "Hong Kong",
+   "ip": "103.28.54.163"
+  },
+  {
+   "id": "tyo",
+   "desc": "Tokyo Koto City (Japan)",
+   "ip": "45.121.184.5"
+  },
+  {
+   "id": "seo",
+   "desc": "Seoul (South Korea)",
+   "ip": "146.66.152.36"
+  },
+  {
+   "id": "sgp",
+   "desc": "Singapore",
+   "ip": "103.10.124.116"
+  },
+  {
+   "id": "bom2",
+   "desc": "Mumbai (India)",
+   "ip": "155.133.224.20"
+  },
+  {
+   "id": "maa2",
+   "desc": "Chennai - Ambattur (India)",
+   "ip": "155.133.225.18"
+  },
+  {
+   "id": "gum",
+   "desc": "Guam",
+   "ip": "185.25.180.18"
+  }
+ ],
+ "NA": [
+  {
+   "id": "lax",
+   "desc": "Los Angeles (California)",
+   "ip": "162.254.195.52"
+  },
+  {
+   "id": "sea",
+   "desc": "Seattle (Washington)",
+   "ip": "205.196.6.135"
+  },
+  {
+   "id": "ord",
+   "desc": "Chicago (Illinois)",
+   "ip": "162.254.193.71"
+  },
+  {
+   "id": "iad",
+   "desc": "Sterling (Virginia)",
+   "ip": "162.254.192.88"
+  },
+  {
+   "id": "atl",
+   "desc": "Atlanta (Georgia)",
+   "ip": "162.254.199.170"
+  },
+  {
+   "id": "dfw",
+   "desc": "Dallas (Texas)",
+   "ip": "162.254.194.37"
+  }
+ ],
+ "EU": [
+  {
+   "id": "ams",
+   "desc": "Amsterdam (Netherlands)",
+   "ip": "155.133.248.36"
+  },
+  {
+   "id": "fra",
+   "desc": "Frankfurt (Germany)",
+   "ip": "155.133.226.68"
+  },
+  {
+   "id": "dfra",
+   "desc": "Datapacket Frankfurt (Germany)",
+   "ip": "89.222.108.161"
+  },
+  {
+   "id": "lhr",
+   "desc": "London (England)",
+   "ip": "162.254.196.66"
+  },
+  {
+   "id": "dlhr",
+   "desc": "Datapacket London (England)",
+   "ip": "212.102.63.139"
+  },
+  {
+   "id": "sto",
+   "desc": "Stockholm - Kista (Sweden)",
+   "ip": "162.254.198.41"
+  },
+  {
+   "id": "sto2",
+   "desc": "Stockholm - Bromma (Sweden)",
+   "ip": "155.133.252.37"
+  },
+  {
+   "id": "mad",
+   "desc": "Madrid (Spain)",
+   "ip": "155.133.246.34"
+  },
+  {
+   "id": "par",
+   "desc": "Paris (France)",
+   "ip": "185.25.182.18"
+  },
+  {
+   "id": "waw",
+   "desc": "Warsaw (Poland)",
+   "ip": "155.133.230.100"
+  },
+  {
+   "id": "vie",
+   "desc": "Vienna (Austria)",
+   "ip": "146.66.155.66"
+  },
+  {
+   "id": "dvie",
+   "desc": "Datapacket Vienna (Austria)",
+   "ip": "152.233.52.97"
+  }
+ ],
+ "SA": [
+  {
+   "id": "gru",
+   "desc": "Sao Paulo (Brazil)",
+   "ip": "155.133.227.35"
+  },
+  {
+   "id": "scl",
+   "desc": "Santiago (Chile)",
+   "ip": "155.133.249.163"
+  },
+  {
+   "id": "lim",
+   "desc": "Lima (Peru)",
+   "ip": "155.133.244.35"
+  },
+  {
+   "id": "eze",
+   "desc": "Buenos Aires (Argentina)",
+   "ip": "155.133.255.98"
+  }
+ ],
+ "OC": [
+  {
+   "id": "syd",
+   "desc": "Sydney (Australia)",
+   "ip": "103.10.125.20"
+  }
+ ],
+ "ME": [
+  {
+   "id": "dxb",
+   "desc": "Dubai (United Arab Emirates)",
+   "ip": "185.25.183.163"
+  },
+  {
+   "id": "dfjr",
+   "desc": "Datapacket Fujairah (UAE)",
+   "ip": "89.222.117.194"
+  }
+ ],
+ "AF": [
+  {
+   "id": "jnb",
+   "desc": "Johannesburg (South Africa)",
+   "ip": "155.133.238.178"
+  }
+ ]
+}

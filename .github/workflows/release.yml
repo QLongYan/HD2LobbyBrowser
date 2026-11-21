@@ -1,0 +1,116 @@
+# GitHub Actions：自动打包 + 发布（点一下就行）
+#
+# 用法：仓库 → Actions → Build and Release → Run workflow → 直接点 Run
+#      版本号可留空（自动 = 当前最新版 +1），也可以手动填 22
+#      约 2 分钟生成 Release v22，附件为 exe + 整包 zip
+#
+# 位置必须是：仓库根目录/.github/workflows/release.yml
+
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（留空 = 自动 +1；只填数字，如 22）'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 计算版本号
+        id: ver
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_VER: ${{ inputs.version }}
+          SRC: github发布/源码/hd2_lobby_browser.py
+        run: |
+          v=$(echo "$INPUT_VER" | tr -d ' vV' | tr -cd '0-9')
+          if [ -z "$v" ]; then
+            tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name 2>/dev/null || true)
+            num=$(echo "$tag" | grep -oE '[0-9]+' | head -1)
+            v=$(( ${num:-0} + 1 ))
+          fi
+          src=$(grep -oE 'VERSION = [0-9]+' "$SRC" | grep -oE '[0-9]+' | head -1)
+          if [ -n "$src" ] && [ "$src" -gt "$v" ]; then v=$src; fi
+          echo "本次发布：V$v"
+          echo "value=$v" >> "$GITHUB_OUTPUT"
+
+      - name: 写入版本号并提交
+        shell: bash
+        env:
+          VER: ${{ steps.ver.outputs.value }}
+          SRC: github发布/源码/hd2_lobby_browser.py
+        run: |
+          sed -i -E "s/^VERSION = [0-9]+/VERSION = $VER/" "$SRC"
+          grep -q "^VERSION = $VER" "$SRC" || { echo "改版本号失败，检查源码路径"; exit 1; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "版本号没变化，跳过提交"
+          else
+            git commit -m "chore: 版本号更新到 V$VER"
+            git push
+          fi
+
+      - name: 安装打包依赖
+        run: pip install --upgrade pyinstaller pywebview
+
+      - name: 打包 exe 与整包 zip
+        shell: pwsh
+        working-directory: github发布
+        env:
+          VER: ${{ steps.ver.outputs.value }}
+        run: |
+          pyinstaller --noconfirm --onefile --noconsole --name HD2LobbyBrowser `
+            --add-data "源码/planets.json;." `
+            --add-data "源码/planets_zh.json;." `
+            --add-data "源码/sectors_zh.json;." `
+            --add-data "源码/mission_names.json;." `
+            --add-data "源码/factions.json;." `
+            --add-data "源码/sdr_pops.json;." `
+            --collect-all webview --collect-all clr_loader --collect-all pythonnet `
+            --hidden-import webview.platforms.edgechromium "源码/hd2lobby_app.py"
+          if (!(Test-Path "dist/HD2LobbyBrowser.exe")) { throw "打包失败：没生成 exe" }
+
+          $stage = Join-Path $env:RUNNER_TEMP "pkg"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "dist/HD2LobbyBrowser.exe" "$stage/HD2LobbyBrowser.exe" -Force
+          Copy-Item "源码/*.json" "$stage/" -Force
+
+          Copy-Item "$stage/HD2LobbyBrowser.exe" "$env:GITHUB_WORKSPACE/HD2LobbyBrowser.exe" -Force
+          $zip = "$env:GITHUB_WORKSPACE/HD2LobbyBrowser-V$env:VER.zip"
+          Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
+          Get-Item "$env:GITHUB_WORKSPACE/HD2LobbyBrowser.exe", $zip | Select-Object Name, Length
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.value }}
+          name: V${{ steps.ver.outputs.value }}
+          body: |
+            V${{ steps.ver.outputs.value }}
+
+            下载 `HD2LobbyBrowser.exe` 直接运行；老用户开软件会自动提示更新。
+          files: |
+            HD2LobbyBrowser.exe
+            HD2LobbyBrowser-V${{ steps.ver.outputs.value }}.zip
+          make_latest: true
+          fail_on_unmatched_files: true
+          generate_release_notes: false

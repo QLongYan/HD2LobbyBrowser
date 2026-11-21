@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, urljoin
 
 APP_ID = 553850
-VERSION = 21
+VERSION = 22
 STEAMID_MIN = 76561197960265728
 STEAMID_MAX = 76561202255233023
 

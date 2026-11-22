@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""HD2 大厅搜索器 V24
+"""HD2 大厅搜索器 V25
 
 游戏外进程用 Steam 的公共大厅列表（ISteamMatchmaking）列出《绝地潜兵2》的公开房间，
 点「加入」通过 steam://joinlobby 让正在运行的游戏进房。
@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, urljoin
 
 APP_ID = 553850
-VERSION = 24
+VERSION = 25
 STEAMID_MIN = 76561197960265728
 STEAMID_MAX = 76561202255233023
 
@@ -243,6 +243,9 @@ I18N = {
         "preset_saved": "预设已保存",
         "preset_fail": "预设保存失败",
         "upgrading": "正在下载更新包…",
+        "upgrading_mb": "正在下载 {a} / {b} MB…",
+        "slow_note": "下载已经 5 分钟没有进展了。可以继续等，也可以点上面的链接手动下载；弹窗不影响后台。",
+        "dl_title": "正在下载更新包",
         "restarting": "升级完成，正在重启…",
         "ok_got_it": "知道了",
         "f_term": "东线 虫族",
@@ -323,6 +326,9 @@ I18N = {
         "preset_saved": "Preset saved",
         "preset_fail": "Could not save preset",
         "upgrading": "Downloading update…",
+        "upgrading_mb": "Downloading {a} / {b} MB…",
+        "slow_note": "No progress for 5 minutes. You can keep waiting, or download manually with the links above — the download continues in the background.",
+        "dl_title": "Downloading update",
         "restarting": "Updated, restarting…",
         "ok_got_it": "OK",
         "f_term": "East · Terminids",
@@ -1297,6 +1303,17 @@ th:last-child,td:last-child{width:1%;text-align:right;white-space:nowrap}
 .pbar{height:9px;background:#232a35;border-radius:5px;overflow:hidden;border:1px solid #2e3644}
 .pbar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,#c8a13a,#f0d07a);transition:width .25s}
 .ptxt{margin-top:5px;font-size:13px;color:#e8c46a;font-weight:600;letter-spacing:.3px}
+#dlprog{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:80;display:none;
+  width:min(560px,calc(100vw - 40px));background:#27313e;border:1px solid #4a5a70;
+  border-radius:10px;padding:12px 16px;box-shadow:0 12px 32px rgba(0,0,0,.65)}
+#dlprog.on{display:block}
+#dlprog .dlhead{display:flex;justify-content:space-between;align-items:baseline;
+  font-size:13px;color:#d7e4f2;margin-bottom:8px}
+#dlprog .dlpct{font-size:13px;font-weight:700;color:#ffe27a;font-variant-numeric:tabular-nums}
+#dlprog .dlbar{height:9px;background:#1b2330;border-radius:5px;overflow:hidden;border:1px solid #3a4759}
+#dlprog .dlbar>i{display:block;height:100%;width:0;
+  background:linear-gradient(90deg,#c8a13a,#ffe27a);transition:width .35s ease}
+#dlprog .dlmeta{margin-top:6px;font-size:12px;color:#9fb0c4;font-variant-numeric:tabular-nums}
 .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
   background:rgba(4,8,14,.74);z-index:90}
 .modal.open{display:flex}
@@ -1304,6 +1321,7 @@ th:last-child,td:last-child{width:1%;text-align:right;white-space:nowrap}
   border-radius:12px;padding:20px 22px 16px;box-shadow:0 24px 60px rgba(0,0,0,.7)}
 .mtext{font-size:15px;line-height:2.0;color:#eef3f9;margin:0 0 14px}
 .mtext a{color:#7fc4ff;margin-left:4px}
+.mnote{font-size:13px;line-height:1.9;color:#9fb0c4;margin:-4px 0 12px;display:none}
 .mfoot{display:flex;justify-content:flex-end}
 </style></head>
 <body>
@@ -1367,6 +1385,11 @@ th:last-child,td:last-child{width:1%;text-align:right;white-space:nowrap}
 <div class="note" id="note"></div>
   <div class="tipbar" data-i18n="tip_delay">由于 steam 端和箭头服务器之间有延迟，刷新后请等 4–5 秒再点「加入」，避免进错房间</div>
 <main><div id="list" class="empty" data-i18n="loading">正在查询…</div></main>
+<div id="dlprog">
+  <div class="dlhead"><span data-i18n="dl_title">正在下载更新包</span><span class="dlpct" id="dlpct"></span></div>
+  <div class="dlbar"><i id="dlfill"></i></div>
+  <div class="dlmeta" id="dlmeta"></div>
+</div>
 <div class="modal" id="umodal">
   <div class="mbox">
     <p class="mtext" id="mtext">下载失败 请到B站：<a
@@ -1376,6 +1399,7 @@ th:last-child,td:last-child{width:1%;text-align:right;white-space:nowrap}
       rel="noopener">https://ayakamods.com/mods/hd2lobbybrowser.6133/</a>下载最新版<br>
       或 <a href="https://github.com/QLongYan/HD2LobbyBrowser/releases" target="_blank"
       rel="noopener">https://github.com/QLongYan/HD2LobbyBrowser/releases</a></p>
+    <p class="mnote" id="mnote"></p>
     <div class="mfoot"><button id="mok" data-i18n="ok_got_it">知道了</button></div>
   </div>
 </div>
@@ -1468,22 +1492,53 @@ function applyPreset(p){
     return true;
   }catch(e){ return false; }
 }
-function showUpgradeFail(){ $('#umodal').classList.add('open'); }
+function showUpgradeFail(slow){
+  const n=document.getElementById('mnote');
+  if(n){ n.style.display = slow ? 'block' : 'none'; n.textContent = slow ? T('slow_note') : ''; }
+  $('#umodal').classList.add('open');
+}
 $('#savepreset').onclick=e=>{ e.preventDefault(); savePreset(); };
 $('#mok').onclick=()=>$('#umodal').classList.remove('open');
 $('#umodal').addEventListener('click',e=>{ if(e.target===$('#umodal')) $('#umodal').classList.remove('open'); });
+let DL_LAST = -1, DL_STALL = 0, DL_WARNED = false;
+function dlShow(on){
+  const e=document.getElementById('dlprog');
+  if(e) e.classList.toggle('on', !!on);
+}
+function dlPaint(p){
+  const total=p.total||0, got=p.got||0;
+  const pct = total ? Math.min(100, got*100/total) : 0;
+  const fill=document.getElementById('dlfill'), pctEl=document.getElementById('dlpct'), meta=document.getElementById('dlmeta');
+  if(fill) fill.style.width = pct.toFixed(1)+'%';
+  if(pctEl) pctEl.textContent = total ? pct.toFixed(0)+'%' : '';
+  if(meta) meta.textContent = T('upgrading_mb')
+      .replace('{a}', (got/1048576).toFixed(1))
+      .replace('{b}', total ? (total/1048576).toFixed(1) : '?');
+}
 $('#upgrade').onclick=async()=>{
   const btn=$('#upgrade'); const label=btn.textContent;
   btn.disabled=true; btn.textContent=T('upgrading');
-  // 45 秒还没下完：提示下载缓慢，给出三个手动下载入口（弹窗文案与失败一致）
-  const slow=setTimeout(()=>{ showUpgradeFail(); }, 45000);
+  DL_LAST=-1; DL_STALL=Date.now(); DL_WARNED=false;
+  dlShow(true); dlPaint({got:0, total:0});
+  // 每 1 秒刷新进度；连续 5 分钟没有任何进展才弹提示
+  const poll=setInterval(async ()=>{
+    try{
+      const p=await (await fetch('/api/upgrade_progress')).json();
+      if(!p || !p.active) return;
+      dlPaint(p);
+      if(p.got !== DL_LAST){ DL_LAST=p.got; DL_STALL=Date.now(); DL_WARNED=false; }
+      else if(!DL_WARNED && Date.now()-DL_STALL > 5*60*1000){
+        DL_WARNED = true;
+        showUpgradeFail(true);
+      }
+    }catch(e){}
+  }, 1000);
   try{
     const d=await (await fetch('/api/upgrade')).json();
-    clearTimeout(slow);
+    clearInterval(poll); dlShow(false);
     if(d && d.ok){
       btn.textContent=T('restarting');
       try{ await fetch('/api/restart'); }catch(e){}
-      // 新版本起不来时旧进程会回滚并继续活着，这里 7 秒后检查一次
       setTimeout(async ()=>{
         try{
           const st=await (await fetch('/api/version')).json();
@@ -1496,7 +1551,7 @@ $('#upgrade').onclick=async()=>{
       return;
     }
     showUpgradeFail();
-  }catch(e){ clearTimeout(slow); showUpgradeFail(); }
+  }catch(e){ clearInterval(poll); dlShow(false); showUpgradeFail(); }
   btn.disabled=false; btn.textContent=label;
 };
 let missionSig='';
@@ -2022,6 +2077,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, json.dumps(
                     {"ok": False, "error": UPGRADE_FAIL, "reason": why}, ensure_ascii=False))
             return self._send(200, json.dumps({"ok": True, "restart": True}, ensure_ascii=False))
+        if u.path == "/api/upgrade_progress":
+            return self._send(200, json.dumps(UPGRADE_PROGRESS, ensure_ascii=False))
         if u.path == "/api/restart":
             RESTART_STATE["error"] = ""
             threading.Thread(target=restart_app, daemon=True).start()
@@ -2105,6 +2162,7 @@ def _grab_package(url, referer=None, timeout=70):
     返回 (True, {"exe": 临时exe, "extra": [(文件名, 临时路径)], "count": N}) 或 (False, 原因)。
     zip 里的 exe 用来替换主程序，其余 json / txt / md 会一并覆盖到 exe 同目录。
     """
+    UPGRADE_PROGRESS.update({"active": True, "got": 0, "total": 0, "url": url})
     deadline = time.time() + timeout          # 整体预算，防止慢速连接一直挂着
     try:
         with _fetch(url, referer=referer, timeout=min(30, timeout)) as resp:
@@ -2112,6 +2170,7 @@ def _grab_package(url, referer=None, timeout=70):
                 expect = int(resp.headers.get("Content-Length") or 0)
             except Exception:
                 expect = 0
+            UPGRADE_PROGRESS["total"] = expect
             chunks = []
             got = 0
             while True:
@@ -2122,6 +2181,7 @@ def _grab_package(url, referer=None, timeout=70):
                     break
                 chunks.append(chunk)
                 got += len(chunk)
+                UPGRADE_PROGRESS["got"] = got
             blob = b"".join(chunks)
             if expect and got != expect:
                 return False, "下载不完整（%d / %d 字节），请重试" % (got, expect)
@@ -2199,17 +2259,21 @@ def upgrade_download():
         if mirrored not in urls:
             urls.append(mirrored)
     reasons = []
-    deadline = time.time() + 150                      # 总预算：不让用户干等
-    for url in urls:
-        if time.time() > deadline:
-            reasons.append("超时")
-            break
-        budget = 70 if url.startswith("https://github.com/") else 35
-        ok, detail = _grab_package(url, timeout=budget)
-        if ok:
-            return True, detail
-        reasons.append("%s → %s" % (url.split("/")[2], detail))
-    return False, "；".join(reasons[-3:]) or "没有可用的下载地址"
+    deadline = time.time() + 600                      # 总预算 10 分钟：慢速线路也能下完
+    try:
+        for url in urls:
+            if time.time() > deadline:
+                reasons.append("超时")
+                break
+            # GitHub 直连给足时间（实测国内约 100 KB/s，14MB 需要 2 分多）
+            budget = 420 if url.startswith("https://github.com/") else 180
+            ok, detail = _grab_package(url, timeout=budget)
+            if ok:
+                return True, detail
+            reasons.append("%s → %s" % (url.split("/")[2], detail))
+        return False, "；".join(reasons[-3:]) or "没有可用的下载地址"
+    finally:
+        UPGRADE_PROGRESS.update({"active": False, "got": 0, "total": 0, "url": ""})
 
 
 def cleanup_old():
@@ -2260,6 +2324,7 @@ def upgrade_apply(pkg):
 
 
 RESTART_STATE = {"error": ""}
+UPGRADE_PROGRESS = {"active": False, "got": 0, "total": 0, "url": ""}
 
 
 def restart_app():

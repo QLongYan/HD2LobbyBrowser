@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""HD2 大厅搜索器 V21
+"""HD2 大厅搜索器 V23
 
 游戏外进程用 Steam 的公共大厅列表（ISteamMatchmaking）列出《绝地潜兵2》的公开房间，
 点「加入」通过 steam://joinlobby 让正在运行的游戏进房。
@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, urljoin
 
 APP_ID = 553850
-VERSION = 22
+VERSION = 23
 STEAMID_MIN = 76561197960265728
 STEAMID_MAX = 76561202255233023
 
@@ -111,10 +111,14 @@ def fetch_github_release():
     tag = str(data.get("tag_name") or "")
     m = re.match(r"[vV]?\s*(\d+)", tag)          # 只认开头的版本号：v21 / 21 / V21.1
     latest = int(m.group(1)) if m else None
+    # 附件优先取 zip（整包带数据文件），没有 zip 再退回单个 exe
     asset = ""
-    for item in data.get("assets") or []:
-        if str(item.get("name", "")).lower().endswith(".exe"):
-            asset = item.get("browser_download_url") or ""
+    for want in (".zip", ".exe"):
+        for item in data.get("assets") or []:
+            if str(item.get("name", "")).lower().endswith(want):
+                asset = item.get("browser_download_url") or ""
+                break
+        if asset:
             break
     return latest, asset, data.get("html_url") or GITHUB_PAGE
 
@@ -154,6 +158,14 @@ try:
         MISSION_HASH = {str(k).lower(): v for k, v in json.load(fh).items()}
 except Exception:
     MISSION_HASH = {}
+
+# mission_hash -> 英文任务名（界面切到 EN 时用）
+MISSION_HASH_EN = {}
+try:
+    with open(os.path.join(RES, "mission_names_en.json"), "r", encoding="utf-8") as fh:
+        MISSION_HASH_EN = {str(k).lower(): v for k, v in json.load(fh).items()}
+except Exception:
+    MISSION_HASH_EN = {}
 
 PLANET_NAME = {p["i"]: p["n"] for p in PLANETS}
 PLANET_SECTOR = {p["i"]: p["s"] for p in PLANETS}
@@ -230,7 +242,7 @@ I18N = {
         "upgrade": "升级",
         "preset_saved": "预设已保存",
         "preset_fail": "预设保存失败",
-        "upgrading": "正在检查更新…",
+        "upgrading": "正在下载更新包…",
         "restarting": "升级完成，正在重启…",
         "ok_got_it": "知道了",
         "f_term": "东线 虫族",
@@ -310,7 +322,7 @@ I18N = {
         "upgrade": "Update",
         "preset_saved": "Preset saved",
         "preset_fail": "Could not save preset",
-        "upgrading": "Checking for updates…",
+        "upgrading": "Downloading update…",
         "restarting": "Updated, restarting…",
         "ok_got_it": "OK",
         "f_term": "East · Terminids",
@@ -900,6 +912,7 @@ class SteamLobbies:
             "level": self._data(lid, b"13"),
             "mission_hash": mhash,
             "mission_name": mname,
+            "mission_name_en": MISSION_HASH_EN.get(mhash, ""),
             "ping": LATENCY.region_ping(region) if (LATENCY and region) else None,
             "members": s.SteamAPI_ISteamMatchmaking_GetNumLobbyMembers(mm, lid),
             "limit": s.SteamAPI_ISteamMatchmaking_GetLobbyMemberLimit(mm, lid),
@@ -1274,9 +1287,9 @@ th:last-child,td:last-child{width:1%;text-align:right;white-space:nowrap}
 .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
   background:rgba(4,8,14,.74);z-index:90}
 .modal.open{display:flex}
-.mbox{width:min(640px,calc(100vw - 64px));background:#27313e;border:1px solid #4a5a70;
+.mbox{width:min(720px,calc(100vw - 64px));background:#27313e;border:1px solid #4a5a70;
   border-radius:12px;padding:20px 22px 16px;box-shadow:0 24px 60px rgba(0,0,0,.7)}
-.mtext{font-size:15px;line-height:1.9;color:#eef3f9;margin:0 0 14px}
+.mtext{font-size:15px;line-height:2.0;color:#eef3f9;margin:0 0 14px}
 .mtext a{color:#7fc4ff;margin-left:4px}
 .mfoot{display:flex;justify-content:flex-end}
 </style></head>
@@ -1345,9 +1358,11 @@ th:last-child,td:last-child{width:1%;text-align:right;white-space:nowrap}
   <div class="mbox">
     <p class="mtext" id="mtext">下载失败 请到B站：<a
       href="https://space.bilibili.com/38739761?spm_id_from=333.788.0.0" target="_blank"
-      rel="noopener">https://space.bilibili.com/38739761?spm_id_from=333.788.0.0</a>  或 A网：<a
-      href="https://ayakamods.com/mods/hd2lobbybrowser.6133/" target="_blank"
-      rel="noopener">https://ayakamods.com/mods/hd2lobbybrowser.6133/</a>下载最新版</p>
+      rel="noopener">https://space.bilibili.com/38739761?spm_id_from=333.788.0.0</a><br>
+      或 A网：<a href="https://ayakamods.com/mods/hd2lobbybrowser.6133/" target="_blank"
+      rel="noopener">https://ayakamods.com/mods/hd2lobbybrowser.6133/</a>下载最新版<br>
+      或 <a href="https://github.com/QLongYan/HD2LobbyBrowser/releases" target="_blank"
+      rel="noopener">https://github.com/QLongYan/HD2LobbyBrowser/releases</a></p>
     <div class="mfoot"><button id="mok" data-i18n="ok_got_it">知道了</button></div>
   </div>
 </div>
@@ -1447,15 +1462,18 @@ $('#umodal').addEventListener('click',e=>{ if(e.target===$('#umodal')) $('#umoda
 $('#upgrade').onclick=async()=>{
   const btn=$('#upgrade'); const label=btn.textContent;
   btn.disabled=true; btn.textContent=T('upgrading');
+  // 45 秒还没下完：提示下载缓慢，给出三个手动下载入口（弹窗文案与失败一致）
+  const slow=setTimeout(()=>{ showUpgradeFail(); }, 45000);
   try{
     const d=await (await fetch('/api/upgrade')).json();
+    clearTimeout(slow);
     if(d && d.ok){
       btn.textContent=T('restarting');
       try{ await fetch('/api/restart'); }catch(e){}
       return;
     }
     showUpgradeFail();
-  }catch(e){ showUpgradeFail(); }
+  }catch(e){ clearTimeout(slow); showUpgradeFail(); }
   btn.disabled=false; btn.textContent=label;
 };
 let missionSig='';
@@ -1475,8 +1493,8 @@ function syncMission(){
 }
 function buildMissionPanel(force){
   const c=missionCounts();
-  const list=Object.keys(c).map(n=>({n:n, c:c[n]}))
-    .sort((a,b)=> b.c-a.c || a.n.localeCompare(b.n, 'zh'));
+  const list=Object.keys(c).map(n=>({n:n, c:c[n], label:missionLabel(n)}))
+    .sort((a,b)=> b.c-a.c || a.label.localeCompare(b.label, LANG==='en'?'en':'zh'));
   const sig=list.map(o=>o.n+': '+o.c).join('|');
   if(!force && sig===missionSig){ syncMission(); return; }
   missionSig=sig;
@@ -1485,7 +1503,7 @@ function buildMissionPanel(force){
   box.innerHTML='';
   let shown=0;
   list.forEach(o=>{
-    if(q && o.n.toLowerCase().indexOf(q)<0) return;
+    if(q && o.label.toLowerCase().indexOf(q)<0 && o.n.toLowerCase().indexOf(q)<0) return;
     shown++;
     const el=document.createElement('label');
     el.className='mitem'+(missionSel.has(o.n)?' on':'');
@@ -1496,7 +1514,7 @@ function buildMissionPanel(force){
       el.classList.toggle('on', cb.checked);
       syncMission(); render();
     };
-    const nm=document.createElement('span'); nm.className='mname'; nm.textContent=o.n; nm.title=o.n;
+    const nm=document.createElement('span'); nm.className='mname'; nm.textContent=o.label; nm.title=o.label;
     const cnt=document.createElement('span'); cnt.className='mc'; cnt.textContent=o.c;
     el.appendChild(cb); el.appendChild(nm); el.appendChild(cnt);
     box.appendChild(el);
@@ -1677,7 +1695,7 @@ async function load(){
 function pvTxt(v){ return v===0?T('pv_public'):(v===1?T('pv_friend'):(v===2?T('pv_private'):T('pv_unknown'))); }
 function pvCls(v){ return v===0?'pv-pub':(v===1?'pv-fri':(v===2?'pv-pri':'pv-unk')); }
 const KEYVAL={
-  planet:r=>r.planet, sos:r=>(r.sos?0:1), mission:r=>(r.mission_name||r.mission_hash||'zzz'), privacy:r=>(r.privacy==null?9:r.privacy), front:r=>r.faction||'zzz', diff:r=>r.diff, members:r=>r.members,
+  planet:r=>r.planet, sos:r=>(r.sos?0:1), mission:r=>(missionLabel(r.mission_name)||r.mission_hash||'zzz'), privacy:r=>(r.privacy==null?9:r.privacy), front:r=>r.faction||'zzz', diff:r=>r.diff, members:r=>r.members,
   ping:r=>(r.ping==null?9999:r.ping), region:r=>(REGION_RANK[r.region]||9),
   age:r=>(r.age==null?-1:r.age), host:r=>(r.host_name||'zzz'),
   platform:r=>({steam:0,psn:1,xbox:2}[r.platform]||9)
@@ -1688,11 +1706,17 @@ function osCell(r){
   const tip=(r.host_name?r.host_name+' · ':'')+T('os_tip');
   return '<span class="osb os-'+r.platform+'" title="'+tip+'">'+n+'</span>';
 }
+function missionLabel(zh){
+  if(LANG!=='en' || !zh) return zh;
+  const r=rooms.find(x=>x.mission_name===zh);
+  return (r && r.mission_name_en) || zh;
+}
 function misCell(r){
   const h = r.mission_hash || '';
-  if(r.mission_name){
+  const name = (LANG==='en' && r.mission_name_en) ? r.mission_name_en : r.mission_name;
+  if(name){
     const tip = h ? T('mis_hash_tip').replace('{h}', h) : '';
-    return '<span class="misb" title="'+tip+'">'+r.mission_name+'</span>';
+    return '<span class="misb" title="'+tip+'">'+name+'</span>';
   }
   if(h) return '<span class="misb none" title="'+T('mis_unknown_tip').replace('{h}',h)+'">'+T('mis_unknown')+'</span>';
   return '<span class="misb none">—</span>';
@@ -1981,7 +2005,8 @@ class Handler(BaseHTTPRequestHandler):
 PRESET_FILE = "preset.json"
 UPGRADE_PAGE = "https://ayakamods.com/mods/hd2lobbybrowser.6133/"
 UPGRADE_FAIL = ("下载失败 请到B站：https://space.bilibili.com/38739761?spm_id_from=333.788.0.0"
-                "  或 A网：https://ayakamods.com/mods/hd2lobbybrowser.6133/下载最新版")
+                "  或 A网：https://ayakamods.com/mods/hd2lobbybrowser.6133/下载最新版"
+                "  或 https://github.com/QLongYan/HD2LobbyBrowser/releases")
 UPGRADE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
@@ -2022,38 +2047,95 @@ def direct_update_url():
     return url if url.lower().startswith("http") else ""
 
 
-def _grab_exe(url, referer=None, timeout=70):
-    """下载并校验：必须是有效 exe（或压缩包里的 exe），返回 (True, 临时路径) / (False, 原因)。"""
+PKG_EXT = (".exe", ".json", ".txt", ".md")
+# 这些是用户自己的东西，更新包一律不覆盖
+PKG_DENY = {"preset.json", "update_url.txt", "hotkey.log",
+            "startup_error.log", "join_fail.log"}
+
+
+def _pkg_name(raw):
+    """取包内文件的纯文件名；拒绝隐藏文件、路径穿越和用户配置。"""
+    name = str(raw or "").replace("\\", "/").split("/")[-1].strip()
+    if not name or name.startswith(".") or name.lower() in PKG_DENY:
+        return ""
+    return name
+
+
+def _grab_package(url, referer=None, timeout=70):
+    """下载更新包（zip 或单个 exe）。
+
+    返回 (True, {"exe": 临时exe, "extra": [(文件名, 临时路径)], "count": N}) 或 (False, 原因)。
+    zip 里的 exe 用来替换主程序，其余 json / txt / md 会一并覆盖到 exe 同目录。
+    """
+    deadline = time.time() + timeout          # 整体预算，防止慢速连接一直挂着
     try:
-        with _fetch(url, referer=referer, timeout=timeout) as resp:
-            head = resp.read(4)
-            blob = head + resp.read()
+        with _fetch(url, referer=referer, timeout=min(30, timeout)) as resp:
+            chunks = []
+            got = 0
+            while True:
+                if time.time() > deadline:
+                    return False, "下载超时（网速太慢，%d 秒只拿到 %.1f MB）" % (timeout, got / 1048576.0)
+                chunk = resp.read(64 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                got += len(chunk)
+            blob = b"".join(chunks)
     except urllib.error.HTTPError as exc:
         return False, "下载被拒: HTTP %s" % exc.code
     except Exception as exc:
         return False, "下载失败: %s" % exc
+
+    exe_blob = None
+    extras = []
     if blob[:2] == b"PK":
         try:
             zf = zipfile.ZipFile(io.BytesIO(blob))
-            member = next((n for n in zf.namelist() if n.lower().endswith(".exe")), None)
-            if not member:
-                return False, "压缩包里没有 exe"
-            blob = zf.read(member)
         except Exception as exc:
             return False, "压缩包解析失败: %s" % exc
-    if blob[:2] != b"MZ" or len(blob) < 5 * 1024 * 1024:
-        return False, "下载到的不是有效 exe（可能是登录/验证页）"
+        for item in zf.infolist():
+            if item.is_dir():
+                continue
+            name = _pkg_name(item.filename)
+            if not name:
+                continue
+            lower = name.lower()
+            try:
+                data = zf.read(item)
+            except Exception:
+                continue
+            if lower.endswith(".exe"):
+                if exe_blob is None and data[:2] == b"MZ":
+                    exe_blob = data
+                continue
+            if lower.endswith(PKG_EXT) and data:
+                extras.append((name, data))
+    elif blob[:2] == b"MZ":
+        exe_blob = blob
+    else:
+        return False, "下载到的不是 exe 也不是 zip"
+
+    if not exe_blob or len(exe_blob) < 5 * 1024 * 1024:
+        return False, "包里的 exe 无效（可能小于 5MB）"
+
+    outdir = tempfile.mkdtemp(prefix="hd2lb_pkg_")
     try:
-        fd, path = tempfile.mkstemp(prefix="hd2lb_new_", suffix=".exe")
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(blob)
+        exe_path = os.path.join(outdir, "HD2LobbyBrowser.exe")
+        with open(exe_path, "wb") as fh:
+            fh.write(exe_blob)
+        written = []
+        for name, data in extras:
+            path = os.path.join(outdir, name)
+            with open(path, "wb") as fh:
+                fh.write(data)
+            written.append((name, path))
     except Exception as exc:
         return False, "写入临时文件失败: %s" % exc
-    return True, path
+    return True, {"exe": exe_path, "extra": written, "count": len(written)}
 
 
 def upgrade_download():
-    """升级包来源：自定义直链 > GitHub Release 资产 > GitHub 镜像。"""
+    """升级包来源：自定义直链 > Release 资产 > GitHub 固定地址 > 镜像。"""
     urls = []
     direct = direct_update_url()
     if direct:
@@ -2074,18 +2156,41 @@ def upgrade_download():
             reasons.append("超时")
             break
         budget = 70 if url.startswith("https://github.com/") else 35
-        ok, detail = _grab_exe(url, timeout=budget)
+        ok, detail = _grab_package(url, timeout=budget)
         if ok:
             return True, detail
         reasons.append("%s → %s" % (url.split("/")[2], detail))
     return False, "；".join(reasons[-3:]) or "没有可用的下载地址"
 
 
-def upgrade_apply(new_exe):
-    """运行中的 exe 允许改名：先把旧文件改成 .old，再把新文件放到原路径。"""
+def cleanup_old():
+    """清掉上次升级留下的 .old 文件（新进程启动时调用）。"""
+    for fn in ("HD2LobbyBrowser.exe.old",):
+        path = os.path.join(HERE, fn)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+
+def upgrade_apply(pkg):
+    """先覆盖数据文件，再替换 exe；exe 替换失败会回滚，不改坏现有程序。"""
     exe = os.path.abspath(sys.executable) if getattr(sys, "frozen", False) else ""
     if not exe or not os.path.exists(exe):
         return False, "非 exe 运行，跳过替换"
+    new_exe = pkg.get("exe") if isinstance(pkg, dict) else pkg
+    if not new_exe or not os.path.exists(new_exe):
+        return False, "更新包里的 exe 不见了"
+
+    done = 0
+    for name, path in (pkg.get("extra") or []) if isinstance(pkg, dict) else []:
+        try:
+            shutil.copy2(path, os.path.join(HERE, name))
+            done += 1
+        except Exception:
+            pass                                  # 单个数据文件失败不阻断整体
+
     old = exe + ".old"
     try:
         if os.path.exists(old):
@@ -2101,11 +2206,8 @@ def upgrade_apply(new_exe):
         except Exception:
             pass
         return False, "写入新版本失败: %s" % exc
-    try:
-        os.remove(new_exe)
-    except Exception:
-        pass
-    return True, old
+    shutil.rmtree(os.path.dirname(new_exe), ignore_errors=True)
+    return True, "已更新主程序 + %d 个数据文件" % done
 
 
 def restart_app():

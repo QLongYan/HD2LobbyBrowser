@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""HD2 大厅搜索器 V23
+"""HD2 大厅搜索器 V24
 
 游戏外进程用 Steam 的公共大厅列表（ISteamMatchmaking）列出《绝地潜兵2》的公开房间，
 点「加入」通过 steam://joinlobby 让正在运行的游戏进房。
@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, urljoin
 
 APP_ID = 553850
-VERSION = 23
+VERSION = 24
 STEAMID_MIN = 76561197960265728
 STEAMID_MAX = 76561202255233023
 
@@ -590,10 +590,11 @@ def find_steam_api():
 
 # ---------------------------------------------------------------- Steam 大厅
 class SteamLobbies:
-    MAX_QUERIES = 12
-    PER_FRONT = 2          # 每条战线扫几个活跃星球
-    PER_FRONT_DIFF = 3     # 指定难度时多扫一个（过滤后每星球命中少）
-    MAX_ROOMS = 400        # 安全上限
+    MAX_QUERIES = 20
+    PER_FRONT = 4          # 每条战线扫几个活跃星球
+    PER_FRONT_DIFF = 5     # 指定难度时多扫几个（过滤后每星球命中少）
+    MAX_ROOMS = 900        # 安全上限
+    SPLIT_AT = 50          # 单次查询的硬上限（Steam 最多 50 条），满了就分段补查
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -716,7 +717,7 @@ class SteamLobbies:
         for sid in pending:
             self.persona(sid)
 
-    def _query(self, planet=None, diff=None, public_only=True):
+    def _query(self, planet=None, diff=None, public_only=True, extra=None):
         s, mm = self.s, self.mm
         s.SteamAPI_ISteamMatchmaking_AddRequestLobbyListDistanceFilter(mm, 3)
         s.SteamAPI_ISteamMatchmaking_AddRequestLobbyListResultCountFilter(mm, 100)
@@ -726,6 +727,9 @@ class SteamLobbies:
             s.SteamAPI_ISteamMatchmaking_AddRequestLobbyListNumericalFilter(mm, KEY_DIFF, int(diff), 0)
         if public_only:
             s.SteamAPI_ISteamMatchmaking_AddRequestLobbyListNumericalFilter(mm, KEY_PRIV, 0, 0)
+        if extra:                                  # (key, value, comparison)
+            s.SteamAPI_ISteamMatchmaking_AddRequestLobbyListNumericalFilter(
+                mm, extra[0], int(extra[1]), int(extra[2]))
         call = s.SteamAPI_ISteamMatchmaking_RequestLobbyList(mm)
         count = None
         if call:
@@ -804,7 +808,16 @@ class SteamLobbies:
             seen = set()
             ids = []
             for planet in targets:
-                for lid in self._query(planet, diff, public_only):
+                batch = self._query(planet, diff, public_only)
+                # 单次最多 50 条：满了就按难度分两段再查一次，把被截掉的房捞回来
+                if diff is None and len(batch) >= self.SPLIT_AT:
+                    got = set(batch)
+                    for comp, val in ((-2, 5), (2, 6)):      # key17 <= 5 / key17 >= 6
+                        for lid in self._query(planet, None, public_only, extra=(KEY_DIFF, val, comp)):
+                            if lid not in got:
+                                got.add(lid)
+                                batch.append(lid)
+                for lid in batch:
                     if lid in seen:
                         continue
                     seen.add(lid)
@@ -835,7 +848,7 @@ class SteamLobbies:
                 for r in matched:
                     if r["host"]:
                         r["host_name"] = self.persona(r["host"])
-            if PLATFORM and matched:                   # 补房主平台 + 跨平台房主名
+            if PLATFORM and matched and platforms:     # 只有勾了 PC/PS/Xbox 才联网查平台
                 PROGRESS.update({"phase": "platform", "scanned": 0, "total": len(matched)})
                 PLATFORM.enrich(matched, progress=PROGRESS)
             if platforms:                              # 只保留勾选的平台
@@ -1470,6 +1483,16 @@ $('#upgrade').onclick=async()=>{
     if(d && d.ok){
       btn.textContent=T('restarting');
       try{ await fetch('/api/restart'); }catch(e){}
+      // 新版本起不来时旧进程会回滚并继续活着，这里 7 秒后检查一次
+      setTimeout(async ()=>{
+        try{
+          const st=await (await fetch('/api/version')).json();
+          if(st && st.restart_error){
+            showUpgradeFail();
+            btn.disabled=false; btn.textContent=label;
+          }
+        }catch(e){}
+      }, 7000);
       return;
     }
     showUpgradeFail();
@@ -1706,10 +1729,14 @@ function osCell(r){
   const tip=(r.host_name?r.host_name+' · ':'')+T('os_tip');
   return '<span class="osb os-'+r.platform+'" title="'+tip+'">'+n+'</span>';
 }
+let MIS_EN_MAP = {};
+function rebuildMissionMap(){
+  MIS_EN_MAP = {};
+  rooms.forEach(r=>{ if(r.mission_name && r.mission_name_en) MIS_EN_MAP[r.mission_name]=r.mission_name_en; });
+}
 function missionLabel(zh){
   if(LANG!=='en' || !zh) return zh;
-  const r=rooms.find(x=>x.mission_name===zh);
-  return (r && r.mission_name_en) || zh;
+  return MIS_EN_MAP[zh] || zh;
 }
 function misCell(r){
   const h = r.mission_hash || '';
@@ -1722,6 +1749,7 @@ function misCell(r){
   return '<span class="misb none">—</span>';
 }
 function render(){
+  rebuildMissionMap();
   if($('#mpanel').classList.contains('open')) buildMissionPanel(false);
   const PRIVATE_ON = chipOn('c-private');
   let rows=rooms.slice();
@@ -1921,7 +1949,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(
                 {"current": VERSION, "latest": VER_INFO["latest"], "url": VER_INFO["url"],
                  "checked": VER_INFO["checked"], "error": VER_INFO["error"],
-                 "source": VER_INFO["source"], "pending": pending}, ensure_ascii=False))
+                 "source": VER_INFO["source"], "pending": pending,
+                 "restart_error": RESTART_STATE["error"]}, ensure_ascii=False))
             return
         if u.path == "/api/planets":
             counts = STATS.get() if STATS else {}
@@ -1994,6 +2023,7 @@ class Handler(BaseHTTPRequestHandler):
                     {"ok": False, "error": UPGRADE_FAIL, "reason": why}, ensure_ascii=False))
             return self._send(200, json.dumps({"ok": True, "restart": True}, ensure_ascii=False))
         if u.path == "/api/restart":
+            RESTART_STATE["error"] = ""
             threading.Thread(target=restart_app, daemon=True).start()
             return self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
         if u.path == "/api/quit":
@@ -2053,6 +2083,14 @@ PKG_DENY = {"preset.json", "update_url.txt", "hotkey.log",
             "startup_error.log", "join_fail.log"}
 
 
+def pe_ok(blob):
+    """粗校验 PE：MZ 头 + e_lfanew 指向 PE\0\0。截断的 exe 一般过不了。"""
+    if len(blob) < 0x40 or blob[:2] != b"MZ":
+        return False
+    off = int.from_bytes(blob[0x3C:0x40], "little")
+    return 0 < off < len(blob) - 4 and blob[off:off + 4] == b"PE\0\0"
+
+
 def _pkg_name(raw):
     """取包内文件的纯文件名；拒绝隐藏文件、路径穿越和用户配置。"""
     name = str(raw or "").replace("\\", "/").split("/")[-1].strip()
@@ -2070,6 +2108,10 @@ def _grab_package(url, referer=None, timeout=70):
     deadline = time.time() + timeout          # 整体预算，防止慢速连接一直挂着
     try:
         with _fetch(url, referer=referer, timeout=min(30, timeout)) as resp:
+            try:
+                expect = int(resp.headers.get("Content-Length") or 0)
+            except Exception:
+                expect = 0
             chunks = []
             got = 0
             while True:
@@ -2081,6 +2123,8 @@ def _grab_package(url, referer=None, timeout=70):
                 chunks.append(chunk)
                 got += len(chunk)
             blob = b"".join(chunks)
+            if expect and got != expect:
+                return False, "下载不完整（%d / %d 字节），请重试" % (got, expect)
     except urllib.error.HTTPError as exc:
         return False, "下载被拒: HTTP %s" % exc.code
     except Exception as exc:
@@ -2091,8 +2135,11 @@ def _grab_package(url, referer=None, timeout=70):
     if blob[:2] == b"PK":
         try:
             zf = zipfile.ZipFile(io.BytesIO(blob))
+            bad = zf.testzip()
         except Exception as exc:
             return False, "压缩包解析失败: %s" % exc
+        if bad:
+            return False, "压缩包校验失败（%s 损坏），请重试" % bad
         for item in zf.infolist():
             if item.is_dir():
                 continue
@@ -2117,6 +2164,8 @@ def _grab_package(url, referer=None, timeout=70):
 
     if not exe_blob or len(exe_blob) < 5 * 1024 * 1024:
         return False, "包里的 exe 无效（可能小于 5MB）"
+    if not pe_ok(exe_blob):
+        return False, "包里的 exe 不完整（PE 结构损坏，可能下载被截断）"
 
     outdir = tempfile.mkdtemp(prefix="hd2lb_pkg_")
     try:
@@ -2210,14 +2259,32 @@ def upgrade_apply(pkg):
     return True, "已更新主程序 + %d 个数据文件" % done
 
 
+RESTART_STATE = {"error": ""}
+
+
 def restart_app():
+    """启动新进程并观察几秒：起不来就把 .old 换回去，避免用户只剩一个坏 exe。"""
     exe = os.path.abspath(sys.executable) if getattr(sys, "frozen", False) else ""
+    if not exe or not os.path.exists(exe):
+        os._exit(0)
+        return
+    old = exe + ".old"
     try:
-        if exe and os.path.exists(exe):
-            subprocess.Popen([exe], cwd=os.path.dirname(exe), close_fds=True)
-    except Exception:
-        pass
-    time.sleep(0.4)
+        proc = subprocess.Popen([exe], cwd=os.path.dirname(exe), close_fds=True)
+    except Exception as exc:
+        RESTART_STATE["error"] = "启动新版本失败：%s" % exc
+        return
+    for _ in range(24):                      # 最多观察 6 秒
+        time.sleep(0.25)
+        if proc.poll() is not None:
+            try:
+                if os.path.exists(old):
+                    os.remove(exe)
+                    os.rename(old, exe)
+                RESTART_STATE["error"] = "新版本启动失败，已恢复到旧版"
+            except Exception as exc:
+                RESTART_STATE["error"] = "新版本启动失败，且回滚失败：%s" % exc
+            return
     os._exit(0)
 
 

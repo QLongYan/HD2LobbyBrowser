@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""HD2 大厅搜索器 V22
+"""HD2 大厅搜索器 V23
 
 游戏外进程用 Steam 的公共大厅列表（ISteamMatchmaking）列出《绝地潜兵2》的公开房间，
 点「加入」通过 steam://joinlobby 让正在运行的游戏进房。
@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, urljoin
 
 APP_ID = 553850
-VERSION = 22
+VERSION = 23
 STEAMID_MIN = 76561197960265728
 STEAMID_MAX = 76561202255233023
 
@@ -158,6 +158,14 @@ try:
         MISSION_HASH = {str(k).lower(): v for k, v in json.load(fh).items()}
 except Exception:
     MISSION_HASH = {}
+
+# mission_hash -> 英文任务名（界面切到 EN 时用）
+MISSION_HASH_EN = {}
+try:
+    with open(os.path.join(RES, "mission_names_en.json"), "r", encoding="utf-8") as fh:
+        MISSION_HASH_EN = {str(k).lower(): v for k, v in json.load(fh).items()}
+except Exception:
+    MISSION_HASH_EN = {}
 
 PLANET_NAME = {p["i"]: p["n"] for p in PLANETS}
 PLANET_SECTOR = {p["i"]: p["s"] for p in PLANETS}
@@ -904,6 +912,7 @@ class SteamLobbies:
             "level": self._data(lid, b"13"),
             "mission_hash": mhash,
             "mission_name": mname,
+            "mission_name_en": MISSION_HASH_EN.get(mhash, ""),
             "ping": LATENCY.region_ping(region) if (LATENCY and region) else None,
             "members": s.SteamAPI_ISteamMatchmaking_GetNumLobbyMembers(mm, lid),
             "limit": s.SteamAPI_ISteamMatchmaking_GetLobbyMemberLimit(mm, lid),
@@ -1278,9 +1287,9 @@ th:last-child,td:last-child{width:1%;text-align:right;white-space:nowrap}
 .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
   background:rgba(4,8,14,.74);z-index:90}
 .modal.open{display:flex}
-.mbox{width:min(640px,calc(100vw - 64px));background:#27313e;border:1px solid #4a5a70;
+.mbox{width:min(720px,calc(100vw - 64px));background:#27313e;border:1px solid #4a5a70;
   border-radius:12px;padding:20px 22px 16px;box-shadow:0 24px 60px rgba(0,0,0,.7)}
-.mtext{font-size:15px;line-height:1.9;color:#eef3f9;margin:0 0 14px}
+.mtext{font-size:15px;line-height:2.0;color:#eef3f9;margin:0 0 14px}
 .mtext a{color:#7fc4ff;margin-left:4px}
 .mfoot{display:flex;justify-content:flex-end}
 </style></head>
@@ -1349,10 +1358,10 @@ th:last-child,td:last-child{width:1%;text-align:right;white-space:nowrap}
   <div class="mbox">
     <p class="mtext" id="mtext">下载失败 请到B站：<a
       href="https://space.bilibili.com/38739761?spm_id_from=333.788.0.0" target="_blank"
-      rel="noopener">https://space.bilibili.com/38739761?spm_id_from=333.788.0.0</a>  或 A网：<a
-      href="https://ayakamods.com/mods/hd2lobbybrowser.6133/" target="_blank"
-      rel="noopener">https://ayakamods.com/mods/hd2lobbybrowser.6133/</a>下载最新版  或 <a
-      href="https://github.com/QLongYan/HD2LobbyBrowser/releases" target="_blank"
+      rel="noopener">https://space.bilibili.com/38739761?spm_id_from=333.788.0.0</a><br>
+      或 A网：<a href="https://ayakamods.com/mods/hd2lobbybrowser.6133/" target="_blank"
+      rel="noopener">https://ayakamods.com/mods/hd2lobbybrowser.6133/</a>下载最新版<br>
+      或 <a href="https://github.com/QLongYan/HD2LobbyBrowser/releases" target="_blank"
       rel="noopener">https://github.com/QLongYan/HD2LobbyBrowser/releases</a></p>
     <div class="mfoot"><button id="mok" data-i18n="ok_got_it">知道了</button></div>
   </div>
@@ -1453,15 +1462,18 @@ $('#umodal').addEventListener('click',e=>{ if(e.target===$('#umodal')) $('#umoda
 $('#upgrade').onclick=async()=>{
   const btn=$('#upgrade'); const label=btn.textContent;
   btn.disabled=true; btn.textContent=T('upgrading');
+  // 45 秒还没下完：提示下载缓慢，给出三个手动下载入口（弹窗文案与失败一致）
+  const slow=setTimeout(()=>{ showUpgradeFail(); }, 45000);
   try{
     const d=await (await fetch('/api/upgrade')).json();
+    clearTimeout(slow);
     if(d && d.ok){
       btn.textContent=T('restarting');
       try{ await fetch('/api/restart'); }catch(e){}
       return;
     }
     showUpgradeFail();
-  }catch(e){ showUpgradeFail(); }
+  }catch(e){ clearTimeout(slow); showUpgradeFail(); }
   btn.disabled=false; btn.textContent=label;
 };
 let missionSig='';
@@ -1481,8 +1493,8 @@ function syncMission(){
 }
 function buildMissionPanel(force){
   const c=missionCounts();
-  const list=Object.keys(c).map(n=>({n:n, c:c[n]}))
-    .sort((a,b)=> b.c-a.c || a.n.localeCompare(b.n, 'zh'));
+  const list=Object.keys(c).map(n=>({n:n, c:c[n], label:missionLabel(n)}))
+    .sort((a,b)=> b.c-a.c || a.label.localeCompare(b.label, LANG==='en'?'en':'zh'));
   const sig=list.map(o=>o.n+': '+o.c).join('|');
   if(!force && sig===missionSig){ syncMission(); return; }
   missionSig=sig;
@@ -1491,7 +1503,7 @@ function buildMissionPanel(force){
   box.innerHTML='';
   let shown=0;
   list.forEach(o=>{
-    if(q && o.n.toLowerCase().indexOf(q)<0) return;
+    if(q && o.label.toLowerCase().indexOf(q)<0 && o.n.toLowerCase().indexOf(q)<0) return;
     shown++;
     const el=document.createElement('label');
     el.className='mitem'+(missionSel.has(o.n)?' on':'');
@@ -1502,7 +1514,7 @@ function buildMissionPanel(force){
       el.classList.toggle('on', cb.checked);
       syncMission(); render();
     };
-    const nm=document.createElement('span'); nm.className='mname'; nm.textContent=o.n; nm.title=o.n;
+    const nm=document.createElement('span'); nm.className='mname'; nm.textContent=o.label; nm.title=o.label;
     const cnt=document.createElement('span'); cnt.className='mc'; cnt.textContent=o.c;
     el.appendChild(cb); el.appendChild(nm); el.appendChild(cnt);
     box.appendChild(el);
@@ -1683,7 +1695,7 @@ async function load(){
 function pvTxt(v){ return v===0?T('pv_public'):(v===1?T('pv_friend'):(v===2?T('pv_private'):T('pv_unknown'))); }
 function pvCls(v){ return v===0?'pv-pub':(v===1?'pv-fri':(v===2?'pv-pri':'pv-unk')); }
 const KEYVAL={
-  planet:r=>r.planet, sos:r=>(r.sos?0:1), mission:r=>(r.mission_name||r.mission_hash||'zzz'), privacy:r=>(r.privacy==null?9:r.privacy), front:r=>r.faction||'zzz', diff:r=>r.diff, members:r=>r.members,
+  planet:r=>r.planet, sos:r=>(r.sos?0:1), mission:r=>(missionLabel(r.mission_name)||r.mission_hash||'zzz'), privacy:r=>(r.privacy==null?9:r.privacy), front:r=>r.faction||'zzz', diff:r=>r.diff, members:r=>r.members,
   ping:r=>(r.ping==null?9999:r.ping), region:r=>(REGION_RANK[r.region]||9),
   age:r=>(r.age==null?-1:r.age), host:r=>(r.host_name||'zzz'),
   platform:r=>({steam:0,psn:1,xbox:2}[r.platform]||9)
@@ -1694,11 +1706,17 @@ function osCell(r){
   const tip=(r.host_name?r.host_name+' · ':'')+T('os_tip');
   return '<span class="osb os-'+r.platform+'" title="'+tip+'">'+n+'</span>';
 }
+function missionLabel(zh){
+  if(LANG!=='en' || !zh) return zh;
+  const r=rooms.find(x=>x.mission_name===zh);
+  return (r && r.mission_name_en) || zh;
+}
 function misCell(r){
   const h = r.mission_hash || '';
-  if(r.mission_name){
+  const name = (LANG==='en' && r.mission_name_en) ? r.mission_name_en : r.mission_name;
+  if(name){
     const tip = h ? T('mis_hash_tip').replace('{h}', h) : '';
-    return '<span class="misb" title="'+tip+'">'+r.mission_name+'</span>';
+    return '<span class="misb" title="'+tip+'">'+name+'</span>';
   }
   if(h) return '<span class="misb none" title="'+T('mis_unknown_tip').replace('{h}',h)+'">'+T('mis_unknown')+'</span>';
   return '<span class="misb none">—</span>';
@@ -2049,10 +2067,20 @@ def _grab_package(url, referer=None, timeout=70):
     返回 (True, {"exe": 临时exe, "extra": [(文件名, 临时路径)], "count": N}) 或 (False, 原因)。
     zip 里的 exe 用来替换主程序，其余 json / txt / md 会一并覆盖到 exe 同目录。
     """
+    deadline = time.time() + timeout          # 整体预算，防止慢速连接一直挂着
     try:
-        with _fetch(url, referer=referer, timeout=timeout) as resp:
-            head = resp.read(4)
-            blob = head + resp.read()
+        with _fetch(url, referer=referer, timeout=min(30, timeout)) as resp:
+            chunks = []
+            got = 0
+            while True:
+                if time.time() > deadline:
+                    return False, "下载超时（网速太慢，%d 秒只拿到 %.1f MB）" % (timeout, got / 1048576.0)
+                chunk = resp.read(64 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                got += len(chunk)
+            blob = b"".join(chunks)
     except urllib.error.HTTPError as exc:
         return False, "下载被拒: HTTP %s" % exc.code
     except Exception as exc:

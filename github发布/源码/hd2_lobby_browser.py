@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""HD2 大厅搜索器 V28
+"""HD2 大厅搜索器 V30
 
 游戏外进程用 Steam 的公共大厅列表（ISteamMatchmaking）列出《绝地潜兵2》的公开房间，
 点「加入」通过 steam://joinlobby 让正在运行的游戏进房。
@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, urljoin
 
 APP_ID = 553850
-VERSION = 29
+VERSION = 30
 STEAMID_MIN = 76561197960265728
 STEAMID_MAX = 76561202255233023
 
@@ -274,7 +274,11 @@ I18N = {
         "upgrading_mb": "正在下载 {a} / {b} MB…",
         "slow_note": "下载已经 5 分钟没有进展了。可以继续等，也可以点上面的链接手动下载；弹窗不影响后台。",
         "dl_title": "正在下载更新包",
-        "restarting": "升级完成，正在重启…",
+        "restarting": "正在重启…",
+        "upd_ready": "更新包已下载并替换完成。点「重启」完成更新。",
+        "upd_note": "如果重启时弹出 python311.dll 找不到：关闭那个窗口，再手动打开一次即可，更新已经生效。",
+        "upd_restart": "重启",
+        "upd_later": "稍后",
         "ok_got_it": "知道了",
         "f_term": "东线 虫族",
         "f_auto": "西线 机器人",
@@ -375,7 +379,11 @@ I18N = {
         "upgrading_mb": "Downloading {a} / {b} MB…",
         "slow_note": "No progress for 5 minutes. You can keep waiting, or download manually with the links above — the download continues in the background.",
         "dl_title": "Downloading update",
-        "restarting": "Updated, restarting…",
+        "restarting": "Restarting…",
+        "upd_ready": "The update has been downloaded and applied. Click Restart to finish.",
+        "upd_note": "If a python311.dll error appears, close it and open the app again — the update is already applied.",
+        "upd_restart": "Restart",
+        "upd_later": "Later",
         "ok_got_it": "OK",
         "f_term": "East · Terminids",
         "f_auto": "West · Automatons",
@@ -562,6 +570,8 @@ class Latency:
 # ---------------------------------------------------------------- 星球在线人数
 class PlanetStats:
     URL = "https://api.helldivers2.dev/api/v1/planets"
+    OFFICIAL = "https://api.live.prod.thehelldiversgame.com/api/WarSeason/%d/status"
+    CACHE = os.path.join(HERE, "planet_counts.json")
     TTL = 180
 
     def __init__(self):
@@ -571,6 +581,38 @@ class PlanetStats:
         self.at = 0
         self.lock = threading.Lock()
         self.fetching = False
+        self.bad_until = 0
+        self._load_cache()
+
+    def _load_cache(self):
+        try:
+            with open(self.CACHE, "r", encoding="utf-8") as fh:
+                d = json.load(fh)
+            counts = {int(k): int(v) for k, v in (d.get("counts") or {}).items()}
+            owners = {int(k): str(v) for k, v in (d.get("owners") or {}).items()}
+            if counts:
+                self.counts, self.owners = counts, owners
+                self.at = float(d.get("at") or 0)
+                self.facs = self._facs_from_owners(owners)
+        except Exception:
+            pass
+
+    def _save_cache(self):
+        try:
+            with open(self.CACHE, "w", encoding="utf-8") as fh:
+                json.dump({"at": self.at, "counts": self.counts, "owners": self.owners},
+                          fh, ensure_ascii=False)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _facs_from_owners(owners):
+        m = {"Terminid": "Terminids", "Terminids": "Terminids",
+             "Automaton": "Automatons", "Automatons": "Automatons",
+             "Illuminate": "Illuminate"}
+        facs = {i: m.get(o) for i, o in owners.items() if m.get(o)}
+        facs[0] = None
+        return facs
 
     def get(self, block=False):
         with self.lock:
@@ -580,9 +622,11 @@ class PlanetStats:
                 return self.counts
             self.fetching = True
         try:
+            if time.time() < self.bad_until:
+                raise RuntimeError("community api recently failed")
             req = urllib.request.Request(self.URL, headers={
                 "X-Super-Client": "hd2-lobby-browser", "X-Super-Contact": "local"})
-            data = json.load(urllib.request.urlopen(req, timeout=8))
+            data = json.load(urllib.request.urlopen(req, timeout=4))
             counts = {}
             facs = {}
             owners = {}
@@ -606,8 +650,30 @@ class PlanetStats:
             facs[0] = None          # 超级地球：人类母星，没有战线
             with self.lock:
                 self.counts, self.facs, self.owners, self.at = counts, facs, owners, time.time()
+                self.bad_until = 0
+                self._save_cache()
         except Exception:
-            pass
+            self.bad_until = time.time() + 300      # 5 分钟内不再等社区 API
+            # 社区 API 不通时退回 Arrowhead 官方战争状态（只取人数/归属）
+            try:
+                wid = WAR.war if WAR else 801
+                req = urllib.request.Request(self.OFFICIAL % wid,
+                                             headers={"Accept-Language": "en-US"})
+                data = json.load(urllib.request.urlopen(req, timeout=8))
+                om = {1: "Humans", 2: "Terminids", 3: "Automatons", 4: "Illuminate"}
+                counts, owners = {}, {}
+                for p in data.get("planetStatus") or []:
+                    idx = int(p.get("index"))
+                    counts[idx] = int(p.get("players") or 0)
+                    owners[idx] = om.get(int(p.get("owner") or 0), "")
+                if counts:
+                    with self.lock:
+                        self.counts, self.owners = counts, owners
+                        self.facs = self._facs_from_owners(owners)
+                        self.at = time.time()
+                        self._save_cache()
+            except Exception:
+                pass
         finally:
             with self.lock:
                 self.fetching = False
@@ -1536,7 +1602,7 @@ tr.mine:hover td{background:rgba(200,161,58,.16)}
 .mtext{font-size:15px;line-height:2.0;color:#eef3f9;margin:0 0 14px}
 .mtext a{color:#7fc4ff;margin-left:4px}
 .mnote{font-size:13px;line-height:1.9;color:#9fb0c4;margin:-4px 0 12px;display:none}
-.mfoot{display:flex;justify-content:flex-end}
+.mfoot{display:flex;justify-content:flex-end;gap:8px}
 .eddd{position:relative}
 .epanel{position:absolute;top:calc(100% + 6px);right:0;z-index:42;display:none;
   width:240px;max-height:min(70vh,620px);overflow:auto;background:#232c39;border:1px solid #4a5a70;
@@ -1661,7 +1727,11 @@ tr.mine:hover td{background:rgba(200,161,58,.16)}
       或 <a href="https://github.com/QLongYan/HD2LobbyBrowser/releases" target="_blank"
       rel="noopener">https://github.com/QLongYan/HD2LobbyBrowser/releases</a></p>
     <p class="mnote" id="mnote"></p>
-    <div class="mfoot"><button id="mok" data-i18n="ok_got_it">知道了</button></div>
+    <div class="mfoot">
+      <button id="mlater" style="display:none" data-i18n="upd_later">稍后</button>
+      <button class="primary" id="mrestart" style="display:none" data-i18n="upd_restart">重启</button>
+      <button id="mok" data-i18n="ok_got_it">知道了</button>
+    </div>
   </div>
 </div>
 <script>
@@ -1768,11 +1838,26 @@ function applyPreset(p){
 function showUpgradeFail(slow){
   const n=document.getElementById('mnote');
   if(n){ n.style.display = slow ? 'block' : 'none'; n.textContent = slow ? T('slow_note') : ''; }
+  $('#mok').style.display=''; $('#mlater').style.display='none'; $('#mrestart').style.display='none';
   $('#umodal').classList.add('open');
 }
 $('#savepreset').onclick=e=>{ e.preventDefault(); savePreset(); };
 $('#mok').onclick=()=>$('#umodal').classList.remove('open');
+$('#mlater').onclick=()=>$('#umodal').classList.remove('open');
+$('#mrestart').onclick=async()=>{
+  const b=$('#mrestart'); b.disabled=true; b.textContent=T('restarting');
+  try{ await fetch('/api/restart'); }catch(e){}
+};
 $('#umodal').addEventListener('click',e=>{ if(e.target===$('#umodal')) $('#umodal').classList.remove('open'); });
+function showUpdateReady(){
+  $('#mtext').textContent=T('upd_ready');
+  const n=$('#mnote'); n.textContent=T('upd_note'); n.style.display='block';
+  $('#mok').style.display='none';
+  $('#mlater').style.display=''; $('#mlater').disabled=false;
+  $('#mrestart').style.display=''; $('#mrestart').disabled=false;
+  $('#mrestart').textContent=T('upd_restart');
+  $('#umodal').classList.add('open');
+}
 let DL_LAST = -1, DL_STALL = 0, DL_WARNED = false;
 function dlShow(on){
   const e=document.getElementById('dlprog');
@@ -1810,17 +1895,8 @@ $('#upgrade').onclick=async()=>{
     const d=await (await fetch('/api/upgrade')).json();
     clearInterval(poll); dlShow(false);
     if(d && d.ok){
-      btn.textContent=T('restarting');
-      try{ await fetch('/api/restart'); }catch(e){}
-      setTimeout(async ()=>{
-        try{
-          const st=await (await fetch('/api/version')).json();
-          if(st && st.restart_error){
-            showUpgradeFail();
-            btn.disabled=false; btn.textContent=label;
-          }
-        }catch(e){}
-      }, 7000);
+      btn.disabled=false; btn.textContent=label;
+      showUpdateReady();
       return;
     }
     showUpgradeFail();
@@ -2068,6 +2144,21 @@ function toggleSector(ps, on){
 function togglePlanet(i, on){
   if(on) draftPlanet.add(i); else draftPlanet.delete(i);
   pStat(); buildSectorCol();
+}
+let planetPollTimer=null;
+async function pollPlanets(tries){
+  tries = tries || 12;
+  for(let i=0;i<tries;i++){
+    try{
+      const d=await (await fetch('/api/planets')).json();
+      const sum=(d.planets||[]).reduce((a,p)=>a+(p.pc||0),0);
+      if(sum>0){
+        planets=d.planets; fillPlanets(); updateDBtn();
+        return;
+      }
+    }catch(e){}
+    await new Promise(r=>setTimeout(r,1500));
+  }
 }
 function fillPlanets(){
   if(!$('#ppanel').classList.contains('open')) draftPlanet=new Set(planetSet);
@@ -2475,6 +2566,7 @@ fetch('/api/preset').then(r=>r.json()).catch(()=>({})).then(p=>{
   if(PRESET && Object.keys(PRESET).length){       // 有预设就套用，并按它直接搜
     applyPreset(PRESET);
   }
+  pollPlanets(12);
   load();
 });
 </script></body></html>
@@ -2885,6 +2977,7 @@ def restart_app():
         return
     old = exe + ".old"
     try:
+        time.sleep(2.0)              # 等杀软扫完刚替换的 exe，减少首次解压被拦
         proc = subprocess.Popen([exe], cwd=os.path.dirname(exe), close_fds=True)
     except Exception as exc:
         RESTART_STATE["error"] = "启动新版本失败：%s" % exc

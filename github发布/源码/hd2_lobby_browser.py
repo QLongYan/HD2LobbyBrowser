@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""HD2 大厅搜索器 V25
+"""HD2 大厅搜索器 V28
 
 游戏外进程用 Steam 的公共大厅列表（ISteamMatchmaking）列出《绝地潜兵2》的公开房间，
 点「加入」通过 steam://joinlobby 让正在运行的游戏进房。
@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, urljoin
 
 APP_ID = 553850
-VERSION = 25
+VERSION = 28
 STEAMID_MIN = 76561197960265728
 STEAMID_MAX = 76561202255233023
 
@@ -167,6 +167,34 @@ try:
 except Exception:
     MISSION_HASH_EN = {}
 
+# 地图类型（场景）：mission_hash -> 唯一类型 1–5；部分任务有多种可能，单独存列表。
+# 数据来自 Lobby-Browser 0.8.14 的游戏内任务表（野外/殖民地/城市/虫窝世界/巨型工厂）。
+ENV_LABELS = {1: ("野外", "Wilderness"), 2: ("殖民地", "Colony"), 3: ("城市", "City"),
+              4: ("虫窝世界", "Hive World"), 5: ("巨型工厂", "Megafactory")}
+ENV_EXACT = {}     # hash -> 1..5（只有一个可能）
+ENV_OPTIONS = {}   # hash -> [1,2,...]（多个可能，外部无法确定具体是哪个）
+try:
+    with open(os.path.join(RES, "env_types.json"), "r", encoding="utf-8") as fh:
+        _env = json.load(fh)
+    ENV_LABELS = {int(k): tuple(v) for k, v in (_env.get("labels") or {}).items()} or ENV_LABELS
+    ENV_EXACT = {str(k).lower(): int(v) for k, v in (_env.get("exact") or {}).items()}
+    ENV_OPTIONS = {str(k).lower(): [int(x) for x in (v or [])]
+                   for k, v in (_env.get("options") or {}).items()}
+except Exception:
+    pass
+
+# 变种类型：星球效果 galacticEffectId -> 变种 key。变种是星球级（不是房间级），
+# 数据来自战争状态接口的 planetActiveEffects，名称表见 hd2api 的 planetEffects。
+VAR_LABELS = {}     # key -> (中文, English)
+EFFECT_VARIANT = {}  # "1243" -> "predator"
+try:
+    with open(os.path.join(RES, "variant_types.json"), "r", encoding="utf-8") as fh:
+        _var = json.load(fh)
+    VAR_LABELS = {k: tuple(v) for k, v in (_var.get("types") or {}).items()}
+    EFFECT_VARIANT = {str(k): v for k, v in (_var.get("effects") or {}).items()}
+except Exception:
+    pass
+
 PLANET_NAME = {p["i"]: p["n"] for p in PLANETS}
 PLANET_SECTOR = {p["i"]: p["s"] for p in PLANETS}
 
@@ -257,7 +285,25 @@ I18N = {
         "p_pc": "PC", "p_ps": "PS", "p_xbox": "Xbox",
         "th_platform": "平台",
         "os_tip": "房主平台（Steam / PlayStation / Xbox）",
-        "prog_platform": "查询房主平台 {a} / {b}",
+        "prog_platform": "查询房主平台 / 昵称 {a} / {b}",
+        "map_btn": "地图类型",
+        "map_all": "全部地图",
+        "map_sel": "已选 {n} 项",
+        "map_unknown": "未知",
+        "map_multi": "多可能",
+        "map_tip": "按任务哈希判定；一个房可能有多种场景时显示「A/B」，勾选任一所选即保留。",
+        "map_cell_tip": "地图类型（按任务哈希）",
+        "p_clear": "清空",
+        "p_apply": "应用",
+        "p_count": "已选 {n} 个星球",
+        "d_tip": "可多选；不勾 = 全部难度",
+        "diff_btn": "难度",
+        "var_btn": "变种类型",
+        "var_all": "全部变种",
+        "var_sel": "已选 {n} 项",
+        "var_empty": "当前结果里没有变种数据（战争状态接口不可用时会为空）",
+        "var_tip": "变种是星球级效果；一个星球有多个变种时显示 A/B/C，勾选任一所选即保留。0 = 当前结果里没有这个变种。",
+        "var_cell_tip": "变种类型（按星球效果）",
         "c_nosession": "隐藏无会话房",
         "c_hidefull": "隐藏满员",
         "c_hidefail": "隐藏进不去的房",
@@ -294,7 +340,7 @@ I18N = {
         "loading": "正在查询…",
         "ago_s": " 秒前", "ago_m": " 分钟前", "ago_h": " 小时前",
         "tip_delay": "由于 steam 端和箭头服务器之间有延迟，刷新后请等 4–5 秒再点「加入」，避免进错房间",
-        "note": "延迟 = 本机到该房间所在区域 Steam 中继的实测值（不是到房主）。房主昵称只有私服房能取到（约 3%）。",
+        "note": "延迟 = 本机到该房间所在区域 Steam 中继的实测值（不是到房主）。",
         "note_scan": "按勾选条件扫了 {n} 个星球、抓到 {got} 个房间，符合条件 {kept} 个。",
         "no_planet": "未选星球",
         "err_join": "游戏没有响应（12 秒），这个房间已标记为「进不去的房」，下次刷新会隐藏。常见原因：房主把「匹配隐私」设成好友、房间已关闭、或你在任务中。换一个房间再试。",
@@ -340,7 +386,25 @@ I18N = {
         "p_pc": "PC", "p_ps": "PS", "p_xbox": "Xbox",
         "th_platform": "Platform",
         "os_tip": "Host platform (Steam / PlayStation / Xbox)",
-        "prog_platform": "Host platform {a} / {b}",
+        "prog_platform": "Host platform / name {a} / {b}",
+        "map_btn": "Map type",
+        "map_all": "All maps",
+        "map_sel": "{n} selected",
+        "map_unknown": "Unknown",
+        "map_multi": "Ambiguous",
+        "map_tip": "Derived from the mission hash; lobbies with several scenes show \"A/B\" and match any selected type.",
+        "map_cell_tip": "Map type (by mission hash)",
+        "p_clear": "Clear",
+        "p_apply": "Apply",
+        "p_count": "{n} planets",
+        "d_tip": "Multi-select; none = all difficulties",
+        "diff_btn": "Difficulty",
+        "var_btn": "Variant",
+        "var_all": "All variants",
+        "var_sel": "{n} selected",
+        "var_empty": "No variant data in the current results (war status API unavailable).",
+        "var_tip": "Variants are planet-level effects; a planet with several shows A/B/C and matches any selected one. 0 = not present in current results.",
+        "var_cell_tip": "Variant (planet effect)",
         "c_nosession": "Hide no-session",
         "c_hidefull": "Hide full",
         "c_hidefail": "Hide unjoinable",
@@ -377,7 +441,7 @@ I18N = {
         "loading": "Searching…",
         "ago_s": "s ago", "ago_m": "m ago", "ago_h": "h ago",
         "tip_delay": "Steam and Arrowhead servers sync with a delay — wait 4–5 seconds after refreshing before clicking Join.",
-        "note": "Ping = measured from this PC to the Steam relay of that lobby's region (not to the host). Host names are only visible for Steam-direct lobbies (crossplay off).",
+        "note": "Ping = measured from this PC to the Steam relay of that lobby's region (not to the host).",
         "note_scan": "Scanned {n} planet(s) per your filters, {got} lobbies found, {kept} matched.",
         "no_planet": "No planet",
         "err_join": "The game did not respond in 12s. This lobby is now marked unjoinable and will be hidden. Common causes: host set Matchmaking Privacy to Friends, lobby closed, or you are in a mission.",
@@ -559,6 +623,96 @@ class PlanetStats:
 
     def warm(self):
         threading.Thread(target=self.get, daemon=True).start()
+
+
+# ---------------------------------------------------------------- 星球变种（战争状态）
+class WarEffects:
+    """从战争状态读 planetActiveEffects → 每个星球的变种列表。
+
+    变种（掠食/孢裂/裂地/喷气旅…）是**星球级**效果，不在 Steam 大厅里；
+    接口用社区 API 的原始代理，失败再退 Arrowhead 官方接口。
+    不访问 helldiverscompanion.com —— 那份站点数据本身也是从这里来的。
+    """
+
+    TTL = 300
+    COMMUNITY = "https://api.helldivers2.dev/raw/api/WarSeason/%d/status"
+    OFFICIAL = "https://api.live.prod.thehelldiversgame.com/api/WarSeason/%d/status"
+
+    def __init__(self):
+        self.planets = {}        # planet index -> [variant key, ...]
+        self.at = 0
+        self.war = self._load_war()
+        self.err = ""
+        self.lock = threading.Lock()
+        self.fetching = False
+
+    def _load_war(self):
+        try:
+            with open(os.path.join(HERE, "war_id.txt"), "r", encoding="utf-8") as fh:
+                n = int((fh.read() or "").strip())
+            if 1 <= n <= 9999:
+                return n
+        except Exception:
+            pass
+        return 801
+
+    def _save_war(self, n):
+        try:
+            with open(os.path.join(HERE, "war_id.txt"), "w", encoding="utf-8") as fh:
+                fh.write(str(n))
+        except Exception:
+            pass
+
+    def _fetch(self, wid):
+        for url, extra in ((self.COMMUNITY, {"X-Super-Client": "hd2-lobby-browser",
+                                            "X-Super-Contact": "local"}),
+                           (self.OFFICIAL, {"Accept-Language": "en-US"})):
+            try:
+                req = urllib.request.Request(url % wid, headers=extra)
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                if isinstance(data, dict) and data.get("planetActiveEffects") is not None:
+                    return data
+            except Exception:
+                continue
+        return None
+
+    def refresh(self):
+        # 战争季 id 会随赛季变；从缓存的 id 往后试 4 个
+        for wid in range(self.war, self.war + 4):
+            data = self._fetch(wid)
+            if not data:
+                continue
+            by = {}
+            for e in data.get("planetActiveEffects") or []:
+                try:
+                    idx = int(e.get("index"))
+                    key = EFFECT_VARIANT.get(str(e.get("galacticEffectId")))
+                except Exception:
+                    continue
+                if not key:
+                    continue
+                lst = by.setdefault(idx, [])
+                if key not in lst:
+                    lst.append(key)
+            with self.lock:
+                self.planets, self.at, self.war, self.err = by, time.time(), wid, ""
+            self._save_war(wid)
+            return True
+        with self.lock:
+            self.err = "战争状态读取失败（变种筛选用不了）"
+        return False
+
+    def variants(self, planet):
+        with self.lock:
+            return list(self.planets.get(planet) or ())
+
+    def warm(self):
+        def run():
+            while True:
+                self.refresh()
+                time.sleep(self.TTL)
+        threading.Thread(target=run, daemon=True).start()
 
 
 # ---------------------------------------------------------------- Steam 路径
@@ -780,11 +934,11 @@ class SteamLobbies:
             return False
         return True
 
-    def pick_planets(self, fronts, diff):
+    def pick_planets(self, fronts, diffs):
         """按战线平均分配搜索预算：每条勾选的线各取在线人数最高的 N 个星球。"""
         counts = STATS.get(block=True) if STATS else {}
         live = STATS.factions() if STATS else {}
-        per = self.PER_FRONT_DIFF if diff is not None else self.PER_FRONT
+        per = self.PER_FRONT_DIFF if diffs else self.PER_FRONT
         lines = fronts or ["Terminids", "Automatons", "Illuminate"]
         out = []
         for f in lines:
@@ -794,7 +948,7 @@ class SteamLobbies:
             out.extend(cand[:per])
         return out[:self.MAX_QUERIES]
 
-    def search(self, planets=None, fronts=None, regions=None, plats=None, diff=None,
+    def search(self, planets=None, fronts=None, regions=None, plats=None, diffs=None,
                hide_nosession=True, hide_full=False, target=None, public_only=True,
                platforms=None):
         """按战线平均分配、固定扫多个星球（Steam 每次最多 50 条），最后按条件筛。"""
@@ -806,7 +960,7 @@ class SteamLobbies:
             if planets:
                 targets = [int(p) for p in planets][:self.MAX_QUERIES]
             else:
-                targets = self.pick_planets(fronts, diff)
+                targets = self.pick_planets(fronts, diffs)
             if not targets:
                 targets = [None]
             PROGRESS.update({"running": True, "scanned": 0, "total": len(targets),
@@ -814,9 +968,9 @@ class SteamLobbies:
             seen = set()
             ids = []
             for planet in targets:
-                batch = self._query(planet, diff, public_only)
+                batch = self._query(planet, None, public_only)
                 # 单次最多 50 条：满了就按难度分两段再查一次，把被截掉的房捞回来
-                if diff is None and len(batch) >= self.SPLIT_AT:
+                if len(batch) >= self.SPLIT_AT:
                     got = set(batch)
                     for comp, val in ((-2, 5), (2, 6)):      # key17 <= 5 / key17 >= 6
                         for lid in self._query(planet, None, public_only, extra=(KEY_DIFF, val, comp)):
@@ -845,8 +999,8 @@ class SteamLobbies:
             rooms = [self._room(lid, now) for lid in ids]
             matched = [r for r in rooms
                        if self._match(r, fronts, regions, plats, hide_nosession, hide_full)]
-            if diff is not None:                       # 用任务包/键17 复核一次，挡掉公布值过期的房
-                matched = [r for r in matched if r["diff"] == int(diff)]
+            if diffs:                                  # 用任务包/键17 复核一次，挡掉公布值过期的房
+                matched = [r for r in matched if r["diff"] in diffs]
             hosts = [r["host"] for r in matched if r["host"]]
             if hosts:
                 PROGRESS["phase"] = "names"
@@ -854,21 +1008,45 @@ class SteamLobbies:
                 for r in matched:
                     if r["host"]:
                         r["host_name"] = self.persona(r["host"])
-            if PLATFORM and matched and platforms:     # 只有勾了 PC/PS/Xbox 才联网查平台
-                PROGRESS.update({"phase": "platform", "scanned": 0, "total": len(matched)})
-                PLATFORM.enrich(matched, progress=PROGRESS)
-            if platforms:                              # 只保留勾选的平台
+            if platforms and PLATFORM:                # 勾了平台：必须先查完才能筛，同步跑
+                todo = [r for r in matched if r.get("host_entity") and not r.get("platform")]
+                if todo:
+                    PROGRESS.update({"phase": "platform", "scanned": 0, "total": len(todo)})
+                    # 要按平台筛就必须全查完（最多 900 个房），不能只查前 400 个
+                    PLATFORM.enrich(matched, limit=len(matched), progress=PROGRESS, budget=600.0)
                 matched = [r for r in matched if r["platform"] in platforms]
             matched.sort(key=lambda r: (-r["members"], r["planet"], r["diff"]))
             self.rooms = {r["lobby"]: r for r in matched}
+            if PLATFORM and not platforms:            # 默认不筛平台：先出表，后台补平台/房主名
+                todo = [r for r in matched if r.get("host_entity") and not r.get("platform")]
+                if todo:
+                    gen = ENRICH["gen"] + 1
+                    ENRICH.update({"running": True, "scanned": 0, "total": len(todo), "gen": gen})
+                    PLATFORM.login()              # 票据先在本线程取好，后台只发 HTTP
+                    threading.Thread(target=self._enrich_bg, args=(todo, gen), daemon=True).start()
+                else:
+                    ENRICH.update({"running": False, "scanned": 0, "total": 0, "gen": ENRICH["gen"] + 1})
             return {"ok": True, "rooms": matched, "count": len(matched), "self": str(self.self_id),
                     "queried": PROGRESS["scanned"], "scanned_ids": len(ids),
+                    "war": bool(WAR and WAR.planets),
                     "planets": [p for p in targets if p is not None]}
         except Exception:
             return {"ok": False, "error": traceback.format_exc(limit=3)}
         finally:
             PROGRESS.update({"running": False, "phase": "idle"})
             self.lock.release()
+
+    def _enrich_bg(self, todo, gen):
+        """后台补平台/房主名：翻页/再刷新时能直接命中缓存，不拖慢出表。"""
+        def stop():
+            return gen != ENRICH["gen"]
+        try:
+            PLATFORM.enrich(todo, progress=ENRICH, budget=180.0, stop=stop)
+        except Exception:
+            pass
+        finally:
+            if gen == ENRICH["gen"]:
+                ENRICH["running"] = False
 
     def _room(self, lid, now):
         s, mm = self.s, self.mm
@@ -889,6 +1067,12 @@ class SteamLobbies:
         diff17 = int(d) if d.isdigit() and 1 <= int(d) <= 10 else 0
         diff = p_diff or diff17
         mname = MISSION_HASH.get(mhash, "") if mhash else ""
+        # 地图类型：唯一值给一个；多可能给全部，显示「A/B」，筛选按"包含任一所选"算
+        map_kind = ENV_EXACT.get(mhash, 0) if mhash else 0
+        map_alts = [k for k in (ENV_OPTIONS.get(mhash) or []) if k] if (mhash and not map_kind) else []
+        map_types = [map_kind] if map_kind else list(map_alts)
+        # 变种：星球级，来自战争状态的 planetActiveEffects
+        variants = WAR.variants(planet_idx) if WAR else []
         priv = self._data(lid, KEY_PRIV)
         privacy = int(priv) if priv.isdigit() else -1
         age = None
@@ -932,6 +1116,10 @@ class SteamLobbies:
             "mission_hash": mhash,
             "mission_name": mname,
             "mission_name_en": MISSION_HASH_EN.get(mhash, ""),
+            "map_kind": map_kind,
+            "map_alts": map_alts,
+            "map_types": map_types,
+            "variants": variants,
             "ping": LATENCY.region_ping(region) if (LATENCY and region) else None,
             "members": s.SteamAPI_ISteamMatchmaking_GetNumLobbyMembers(mm, lid),
             "limit": s.SteamAPI_ISteamMatchmaking_GetLobbyMemberLimit(mm, lid),
@@ -981,7 +1169,8 @@ class PlatformIndex:
     NAMES = {0: "psn", 1: "steam", 4: "xbox"}
     TTL_OK = 1800
     TTL_BAD = 300
-    WORKERS = 24
+    WORKERS = 48            # 实测 64 并发不报错；留余量取 48，400 个房约 5–6 秒
+    BUDGET = 8.0            # 单次刷新最多花在补平台上的秒数，超时剩下的下次刷新再补（有缓存）
 
     def __init__(self, steam):
         self.steam = steam
@@ -1088,11 +1277,16 @@ class PlatformIndex:
             self.calls += 1
         return info
 
-    def enrich(self, rooms, limit=400, progress=None):
-        """给房间补 platform / host_name（只补还没查过的）。返回命中数。"""
+    def enrich(self, rooms, limit=400, progress=None, budget=None, stop=None):
+        """给房间补 platform / host_name（只补还没查过的）。返回命中数。
+
+        分块跑并带时间预算：一次刷新查不完就留到下次（结果缓存 30 分钟），
+        不会为了补全平台把刷新拖到几十秒。
+        """
         todo = [r for r in rooms if r.get("host_entity") and not r.get("platform")][:limit]
         if not todo:
             return 0
+        end = time.time() + (self.BUDGET if budget is None else budget)
 
         def one(room):
             info = self.lookup(room["host_entity"])
@@ -1103,8 +1297,14 @@ class PlatformIndex:
             if progress is not None:
                 progress["scanned"] = progress.get("scanned", 0) + 1
 
-        with ThreadPoolExecutor(max_workers=self.WORKERS) as pool:
-            list(pool.map(one, todo))
+        for i in range(0, len(todo), self.WORKERS):
+            if stop and stop():
+                break
+            chunk = todo[i:i + self.WORKERS]
+            with ThreadPoolExecutor(max_workers=self.WORKERS) as pool:
+                list(pool.map(one, chunk))
+            if time.time() > end and i + self.WORKERS < len(todo):
+                break
         return sum(1 for r in todo if r.get("platform"))
 
 
@@ -1151,6 +1351,8 @@ LATENCY = None
 STATS = None
 FAILS = None
 PROGRESS = {"running": False, "scanned": 0, "total": 0, "phase": "idle", "started": 0}
+ENRICH = {"running": False, "scanned": 0, "total": 0, "gen": 0}   # 后台补平台/房主名的进度
+WAR = None            # WarEffects，由入口脚本初始化
 PLATFORM = None       # PlatformIndex，由入口脚本初始化
 
 
@@ -1247,11 +1449,23 @@ th:last-child,td:last-child{width:1%;text-align:right;white-space:nowrap}
 .pv-pub{background:#23402f;color:#a6e6b6}.pv-fri{background:#47401f;color:#f0dda0}
 .pv-pri{background:#5a3636;color:#ffc2b2}.pv-unk{background:#2c3746;color:#a3aebe}
 .host{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+tr.mine td{background:rgba(200,161,58,.10)}
+tr.mine td:first-child{box-shadow:inset 3px 0 #c8a13a}
+tr.mine:hover td{background:rgba(200,161,58,.16)}
 #lang{min-width:44px}
 .pdd{position:relative}
 .pddpanel{position:absolute;top:calc(100% + 6px);right:0;z-index:40;display:none;background:#232c39;
-  border:1px solid #435166;border-radius:8px;box-shadow:0 14px 36px rgba(0,0,0,.7)}
+  border:1px solid #435166;border-radius:8px;box-shadow:0 14px 36px rgba(0,0,0,.7);flex-direction:column}
 .pddpanel.open{display:flex}
+.pcols{display:flex}
+.pfoot{display:flex;align-items:center;gap:8px;padding:7px 10px;border-top:1px solid #33404f;
+  background:#1f2733;border-radius:0 0 8px 8px}
+.pfoot #pstat{flex:1;font-size:12px;color:#9fb0c4}
+.pfoot button{padding:4px 10px;font-size:12px}
+.pitem input{accent-color:#4a9bea;width:14px;height:14px;margin:0 2px 0 0;flex:none}
+.pitem .pname{flex:1;overflow:hidden;text-overflow:ellipsis}
+.pitem.sel{color:#dbe9fb}
+.pitem.sel .pc{color:#bfe0ff}
 .pcol{width:200px;max-height:430px;overflow:auto;padding:6px 0;border-right:1px solid #33404f}
 .pcol:last-child{border-right:0}
 .pcol:empty{display:none}
@@ -1262,9 +1476,9 @@ th:last-child,td:last-child{width:1%;text-align:right;white-space:nowrap}
 .pitem .pc{color:#8b97a8;font-variant-numeric:tabular-nums}
 .pitem .pc.warm{color:#ffcf5a}
 .osb{display:inline-block;padding:1px 7px;border-radius:10px;font-size:12px;white-space:nowrap;font-weight:600}
-.os-steam{background:#1f3b57;color:#a9d3f2}
-.os-psn{background:#22325c;color:#b9c8f8}
-.os-xbox{background:#1e3a26;color:#a7e3b6}
+.osb.os-steam{background:#1f3b57;color:#a9d3f2}
+.osb.os-psn{background:#22325c;color:#b9c8f8}
+.osb.os-xbox{background:#1e3a26;color:#a7e3b6}
 .chip.on.os-pc{background:#2f6fb5;border-color:#7db4ea;color:#fff}
 .chip.on.os-ps{background:#2f4f9e;border-color:#93aef2;color:#fff}
 .chip.on.os-xbox{background:#2f7a45;border-color:#8fd9a4;color:#fff}
@@ -1323,6 +1537,23 @@ th:last-child,td:last-child{width:1%;text-align:right;white-space:nowrap}
 .mtext a{color:#7fc4ff;margin-left:4px}
 .mnote{font-size:13px;line-height:1.9;color:#9fb0c4;margin:-4px 0 12px;display:none}
 .mfoot{display:flex;justify-content:flex-end}
+.eddd{position:relative}
+.epanel{position:absolute;top:calc(100% + 6px);right:0;z-index:42;display:none;
+  width:240px;max-height:min(70vh,620px);overflow:auto;background:#232c39;border:1px solid #4a5a70;
+  border-radius:8px;box-shadow:0 14px 36px rgba(0,0,0,.7);padding:6px 0}
+.epanel.open{display:block}
+.eitem{display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:12.5px;
+  color:#c2ccd9;cursor:pointer;user-select:none}
+.eitem:hover{background:#2c3746;color:#ffffff}
+.eitem.on{background:#2f6fb5;color:#ffffff;font-weight:600}
+.eitem input{accent-color:#4a9bea;width:14px;height:14px;margin:0;flex:none}
+.eitem .ename{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.eitem .ec{font-size:11px;color:#8b97a8;font-variant-numeric:tabular-nums}
+.eitem.on .ec{color:#dceafd}
+.efoot{padding:7px 12px;border-top:1px solid #3a4759;color:#96a1b1;font-size:11.5px;line-height:1.5}
+#ebtn.on,#vbtn.on,#dbtn.on,#pbtn.on{border-color:#7db4ea;background:#2f6fb5;color:#ffffff;font-weight:700}
+#ebtn .mcount:not(:empty),#vbtn .mcount:not(:empty),#dbtn .mcount:not(:empty){margin-left:6px;font-size:11px;font-weight:700;background:#0f1722;
+  color:#bfe0ff;border-radius:9px;padding:0 6px}
 </style></head>
 <body>
 <header>
@@ -1333,6 +1564,20 @@ th:last-child,td:last-child{width:1%;text-align:right;white-space:nowrap}
     <span class="tag" id="state" data-i18n="state_ready">准备中…</span>
     <span class="tag" id="mine"></span>
     <span style="flex:1"></span>
+    <div class="eddd" id="vddd">
+      <button id="vbtn"><span data-i18n="var_btn">变种类型</span><b class="mcount" id="vcount"></b> ▾</button>
+      <div class="epanel" id="vpanel">
+        <div id="vgrid"></div>
+        <div class="efoot" data-i18n="var_tip"></div>
+      </div>
+    </div>
+    <div class="eddd" id="eddd">
+      <button id="ebtn"><span data-i18n="map_btn">地图类型</span><b class="mcount" id="ecount"></b> ▾</button>
+      <div class="epanel" id="epanel">
+        <div id="egrid"></div>
+        <div class="efoot" data-i18n="map_tip"></div>
+      </div>
+    </div>
     <div class="mdd" id="mdd">
       <button id="mbtn"><span data-i18n="mission_btn">任务</span><b class="mcount" id="mcount"></b> ▾</button>
       <div class="mpanel" id="mpanel">
@@ -1350,12 +1595,28 @@ th:last-child,td:last-child{width:1%;text-align:right;white-space:nowrap}
     <div class="pdd" id="pdd">
       <button id="pbtn"><span data-i18n="planet">全部星球</span> ▾</button>
       <div class="pddpanel" id="ppanel">
-        <div class="pcol" id="pc1"></div>
-        <div class="pcol" id="pc2"></div>
-        <div class="pcol" id="pc3"></div>
+        <div class="pcols">
+          <div class="pcol" id="pc1"></div>
+          <div class="pcol" id="pc2"></div>
+          <div class="pcol" id="pc3"></div>
+        </div>
+        <div class="pfoot">
+          <span id="pstat"></span>
+          <button id="pclear" data-i18n="p_clear">清空</button>
+          <button class="primary" id="papply" data-i18n="p_apply">应用</button>
+        </div>
       </div>
     </div>
-    <select id="diff"><option value="" data-i18n="diff">全部难度</option><option value="0" data-i18n="diff0">未选任务</option></select>
+    <div class="eddd" id="dddd">
+      <button id="dbtn"><span id="dlabel">全部难度</span> ▾</button>
+      <div class="epanel" id="dpanel">
+        <div id="dgrid"></div>
+        <div class="efoot" style="display:flex;gap:8px;align-items:center">
+          <span style="flex:1" data-i18n="d_tip">可多选；不勾 = 全部难度</span>
+          <button id="dapply" data-i18n="p_apply">应用</button>
+        </div>
+      </div>
+    </div>
     <button id="savepreset" data-i18n="save_preset">保存预设</button>
     <button class="primary" id="refresh" data-i18n="refresh">刷新</button>
     <button id="upgrade" data-i18n="upgrade" disabled>升级</button>
@@ -1408,11 +1669,15 @@ const $=s=>document.querySelector(s);
 const REGION_RANK={AS:1,OC:2,ME:3,EU:4,NA:5,SA:6,AF:7};
 const DIFFCN=__DIFFCN__, DIFFEN=__DIFFEN__;
 const REGIONCN=__REGIONCN__, REGIONEN=__REGIONEN__;
+const ENVLABELS=__ENVLABELS__;
+const VARLABELS=__VARLABELS__;
+const ENVKINDS=[1,2,3,4,5];
 let LANG=localStorage.getItem('hd2lb_lang')||__LANG__;
 const T=k=>(I18N[LANG]&&I18N[LANG][k])||I18N.zh[k]||k;
-let planets=[], selfLobby='', rooms=[];
+let planets=[], selfLobby='', selfRoom=null, rooms=[], warReady=false;
+let loadTime='';
 let sortKey='ping', sortDir=1;
-const fronts=new Set(), regions=new Set(), plats=new Set(), osSel=new Set(), missionSel=new Set();
+const fronts=new Set(), regions=new Set(), plats=new Set(), osSel=new Set(), missionSel=new Set(), envSel=new Set(), varSel=new Set();
 const FRONTS=[['Terminids','f_term','f-term'],['Automatons','f_auto','f-auto'],['Illuminate','f_illu','f-illu']];
 const REGIONS=[['AS','r_as'],['NA','r_na'],['EU','r_eu'],['OC','r_oc'],['SA','r_sa'],['ME','r_me'],['AF','r_af']];
 const PLATS=[['private','p_private']];
@@ -1423,7 +1688,7 @@ function applyI18n(){
   document.title=T('title');
   document.documentElement.lang = LANG==='zh'?'zh-CN':'en';
   $('#lang').textContent=T('lang_btn');
-  syncMission();
+  syncMission(); syncEnv(); syncVar(); updatePbtn(); updateDBtn();
 }
 function chips(box, list, set){
   box.innerHTML='';
@@ -1459,9 +1724,9 @@ function collectPreset(){
   const chips={};
   CHIP_IDS.forEach(id=>{ chips[id]=chipOn(id); });
   return {
-    planets: planetSel==='' ? '' : String(planetSel),
+    planets: planetSet.size ? [...planetSet] : '',
     fronts: [...fronts], regions: [...regions], plats: [...plats], os: [...osSel],
-    missions: [...missionSel], diff: $('#diff').value, chips: chips,
+    missions: [...missionSel], env: [...envSel], vars: [...varSel], diffs: [...diffSet], chips: chips,
     sort: {key: sortKey, dir: sortDir}
   };
 }
@@ -1479,16 +1744,24 @@ async function savePreset(){
 function applyPreset(p){
   if(!p || typeof p!=='object') return false;
   try{
-    planetSel=(p.planets==null) ? '' : String(p.planets);
+    planetSet.clear();
+    if(Array.isArray(p.planets)) p.planets.forEach(v=>{ const n=Number(v); if(n) planetSet.add(n); });
+    else if(p.planets!=null && p.planets!=='') planetSet.add(Number(p.planets));
+    diffSet.clear();
+    if(Array.isArray(p.diffs)) p.diffs.forEach(v=>{ if(String(v)!=='') diffSet.add(Number(v)); });
+    else if(p.diffs!=null && p.diffs!=='') diffSet.add(Number(p.diffs));
+    else if(p.diff!=null && p.diff!=='') diffSet.add(Number(p.diff));
     fronts.clear();  (p.fronts||[]).forEach(v=>fronts.add(v));
     regions.clear(); (p.regions||[]).forEach(v=>regions.add(v));
     plats.clear();   (p.plats||[]).forEach(v=>plats.add(v));
     osSel.clear();   (p.os||[]).forEach(v=>osSel.add(v));
     missionSel.clear(); (p.missions||[]).forEach(v=>missionSel.add(v));
+    envSel.clear();   (p.env||[]).forEach(v=>{ const n=Number(v); if(n) envSel.add(n); });
+    varSel.clear();   (p.vars||[]).forEach(v=>varSel.add(String(v)));
     const chips=p.chips||{};
     CHIP_IDS.forEach(id=>{ const el=document.getElementById(id); if(el) el.classList.toggle('on', !!chips[id]); });
     if(p.sort && p.sort.key){ sortKey=p.sort.key; sortDir=(p.sort.dir===-1)?-1:1; }
-    buildChips(); fillPlanets(); syncMission();
+    buildChips(); fillPlanets(); updatePbtn(); updateDBtn(); syncMission(); syncVar();
     return true;
   }catch(e){ return false; }
 }
@@ -1569,6 +1842,125 @@ function syncMission(){
   document.getElementById('mcount').textContent = on ? missionSel.size : '';
   document.getElementById('mstat').textContent = on ? T('m_sel').replace('{n}', missionSel.size) : T('m_all');
 }
+/* ---- 地图类型（场景）：服务端按 mission_hash 给 map_kind / map_alts ---- */
+function envBase(k){
+  const v=ENVLABELS[k];
+  if(!v) return String(k);
+  return LANG==='en' ? (v[1]||v[0]) : v[0];
+}
+function envLabel(r){
+  if(!r) return '';
+  const ks = r.map_types || (r.map_kind ? [r.map_kind] : (r.map_alts||[]));
+  return ks.map(envBase).join('/');
+}
+function envCounts(){
+  const c={};
+  rooms.forEach(r=>{ (r.map_types||[]).forEach(k=>{ if(k) c[k]=(c[k]||0)+1; }); });
+  return c;
+}
+function syncEnv(){
+  const btn=document.getElementById('ebtn');
+  if(!btn) return;
+  const on=envSel.size>0;
+  btn.classList.toggle('on', on);
+  document.getElementById('ecount').textContent = on ? envSel.size : '';
+}
+function buildEnvPanel(){
+  const box=document.getElementById('egrid');
+  if(!box) return;
+  const c=envCounts();
+  const sig=ENVKINDS.map(k=>k+':'+(c[k]||0)).join('|')+'/'+LANG+'/'+[...envSel].join(',');
+  if(box.dataset.sig===sig){ syncEnv(); return; }
+  box.dataset.sig=sig;
+  box.innerHTML='';
+  ENVKINDS.forEach(k=>{
+    const el=document.createElement('label');
+    el.className='eitem'+(envSel.has(k)?' on':'');
+    const cb=document.createElement('input');
+    cb.type='checkbox'; cb.checked=envSel.has(k);
+    cb.onchange=()=>{
+      if(cb.checked) envSel.add(k); else envSel.delete(k);
+      el.classList.toggle('on', cb.checked);
+      syncEnv(); render();
+    };
+    const nm=document.createElement('span'); nm.className='ename'; nm.textContent=envBase(k);
+    const cnt=document.createElement('span'); cnt.className='ec'; cnt.textContent=c[k]||0;
+    el.appendChild(cb); el.appendChild(nm); el.appendChild(cnt);
+    box.appendChild(el);
+  });
+  syncEnv();
+}
+const PANEL_IDS=['ppanel','vpanel','epanel','mpanel','dpanel'];
+function closePanels(except){
+  PANEL_IDS.forEach(id=>{ if(id!==except){ const el=document.getElementById(id); if(el) el.classList.remove('open'); } });
+}
+$('#ebtn').onclick=e=>{
+  e.stopPropagation();
+  const p=$('#epanel');
+  if(p.classList.contains('open')) p.classList.remove('open');
+  else { closePanels('epanel'); buildEnvPanel(true); p.classList.add('open'); }
+};
+/* ---- 变种类型：服务端按星球给 variants 列表（星球级效果） ---- */
+function varBase(k){
+  const v=VARLABELS[k];
+  if(!v) return String(k);
+  return LANG==='en' ? (v[1]||v[0]) : v[0];
+}
+function varLabel(r){
+  return (r && r.variants) ? r.variants.map(varBase).join('/') : '';
+}
+function varCounts(){
+  const c={};
+  rooms.forEach(r=>{ (r.variants||[]).forEach(k=>{ c[k]=(c[k]||0)+1; }); });
+  return c;
+}
+function syncVar(){
+  const btn=document.getElementById('vbtn');
+  if(!btn) return;
+  const on=varSel.size>0;
+  btn.classList.toggle('on', on);
+  document.getElementById('vcount').textContent = on ? varSel.size : '';
+}
+let varSig='';
+function buildVarPanel(force){
+  const box=document.getElementById('vgrid');
+  if(!box) return;
+  const c=varCounts();
+  const keys=Object.keys(VARLABELS);
+  const list=keys.map(k=>({k:k, c:c[k]||0, label:varBase(k)}))
+    .sort((a,b)=> b.c-a.c || a.label.localeCompare(b.label, LANG==='en'?'en':'zh'));
+  const sig=list.map(o=>o.k+':'+o.c).join('|')+'/'+LANG+'/'+[...varSel].join(',')+'/'+(warReady?1:0);
+  if(!force && sig===varSig){ syncVar(); return; }
+  varSig=sig;
+  box.innerHTML='';
+  if(!list.length || !warReady){
+    const e=document.createElement('div');
+    e.className='mempty'; e.textContent=T('var_empty'); box.appendChild(e);
+    syncVar(); return;
+  }
+  list.forEach(o=>{
+    const el=document.createElement('label');
+    el.className='eitem'+(varSel.has(o.k)?' on':'');
+    const cb=document.createElement('input');
+    cb.type='checkbox'; cb.checked=varSel.has(o.k);
+    cb.onchange=()=>{
+      if(cb.checked) varSel.add(o.k); else varSel.delete(o.k);
+      el.classList.toggle('on', cb.checked);
+      syncVar(); render();
+    };
+    const nm=document.createElement('span'); nm.className='ename'; nm.textContent=o.label; nm.title=o.label;
+    const cnt=document.createElement('span'); cnt.className='ec'; cnt.textContent=o.c;
+    el.appendChild(cb); el.appendChild(nm); el.appendChild(cnt);
+    box.appendChild(el);
+  });
+  syncVar();
+}
+$('#vbtn').onclick=e=>{
+  e.stopPropagation();
+  const p=$('#vpanel');
+  if(p.classList.contains('open')) p.classList.remove('open');
+  else { closePanels('vpanel'); buildVarPanel(true); p.classList.add('open'); }
+};
 function buildMissionPanel(force){
   const c=missionCounts();
   const list=Object.keys(c).map(n=>({n:n, c:c[n], label:missionLabel(n)}))
@@ -1615,7 +2007,7 @@ function openMissionPanel(){
 $('#mbtn').onclick=e=>{
   e.stopPropagation();
   const p=$('#mpanel');
-  if(p.classList.contains('open')) p.classList.remove('open'); else openMissionPanel();
+  if(p.classList.contains('open')) p.classList.remove('open'); else { closePanels('mpanel'); openMissionPanel(); }
 };
 $('#msearch').oninput=()=>buildMissionPanel(true);
 $('#mselectall').onclick=e=>{
@@ -1630,25 +2022,60 @@ $('#mclear').onclick=e=>{
 document.addEventListener('click', e=>{
   const mdd=document.getElementById('mdd');
   if(mdd && !mdd.contains(e.target)) $('#mpanel').classList.remove('open');
+  const edd=document.getElementById('eddd');
+  if(edd && !edd.contains(e.target)) $('#epanel').classList.remove('open');
+  const vdd=document.getElementById('vddd');
+  if(vdd && !vdd.contains(e.target)) $('#vpanel').classList.remove('open');
+  const ddd=document.getElementById('dddd');
+  if(ddd && !ddd.contains(e.target)) $('#dpanel').classList.remove('open');
 });
-document.addEventListener('keydown', e=>{ if(e.key==='Escape') $('#mpanel').classList.remove('open'); });
-let planetSel='', curFront='', curSector='';
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closePanels(''); });
+let planetSet=new Set(), draftPlanet=new Set(), curFront='', curSector='';
 function pName(p){ return (LANG==='zh' && p.z) ? p.z : p.n; }
 function sName(en, zh){ return (LANG==='zh' && zh) ? zh : en; }
 function fmt(n){ return (n||0).toLocaleString(); }
 function updatePbtn(){
   const b=$('#pbtn');
-  if(planetSel===''){ b.innerHTML='<span>'+T('planet')+'</span> ▾'; return; }
-  const p=planets.find(x=>String(x.i)===String(planetSel));
-  b.innerHTML='<span>'+T('planet')+'：'+(p?pName(p):planetSel)+'</span> ▾';
+  if(!planetSet.size){ b.innerHTML='<span>'+T('planet')+'</span> ▾'; b.classList.remove('on'); return; }
+  b.classList.add('on');
+  if(planetSet.size===1){
+    const one=planets.find(x=>x.i===Number([...planetSet][0]));
+    b.innerHTML='<span>'+(one?pName(one):[...planetSet][0])+'</span> ▾';
+  } else {
+    b.innerHTML='<span>'+T('p_count').replace('{n}',planetSet.size)+'</span> ▾';
+  }
+}
+function pStat(){
+  $('#pstat').textContent = draftPlanet.size ? T('p_count').replace('{n}',draftPlanet.size) : T('planet');
+  const all=document.querySelector('#pc1 .pitem');
+  if(all) all.classList.toggle('on', draftPlanet.size===0);
 }
 function closePPanel(){ $('#ppanel').classList.remove('open'); }
+function openPPanel(){
+  draftPlanet=new Set(planetSet);
+  curFront='*'; curSector='';
+  $('#ppanel').classList.add('open');
+  fillPlanets();
+}
+function applyPlanets(){
+  planetSet=new Set(draftPlanet);
+  updatePbtn(); closePPanel(); load();
+}
+function toggleSector(ps, on){
+  ps.forEach(p=>{ if(on) draftPlanet.add(p.i); else draftPlanet.delete(p.i); });
+  buildSectorCol(); buildPlanetCol(); pStat();
+}
+function togglePlanet(i, on){
+  if(on) draftPlanet.add(i); else draftPlanet.delete(i);
+  pStat(); buildSectorCol();
+}
 function fillPlanets(){
+  if(!$('#ppanel').classList.contains('open')) draftPlanet=new Set(planetSet);
   const c1=$('#pc1'); c1.innerHTML='';
   const all=document.createElement('div');
-  all.className='pitem'+(planetSel===''?' on':'');
+  all.className='pitem'+(draftPlanet.size?'':' on');
   all.innerHTML='<span>'+T('planet')+'</span><span class="pc">'+planets.length+'</span>';
-  all.onclick=()=>{ planetSel=''; updatePbtn(); closePPanel(); fillPlanets(); load(); };
+  all.onclick=(e)=>{ e.stopPropagation(); draftPlanet.clear(); curFront='*'; curSector=''; fillPlanets(); };
   c1.appendChild(all);
 
   const lines=[['Terminids',T('f_term')],['Automatons',T('f_auto')],['Illuminate',T('f_illu')],['',T('other')]];
@@ -1663,20 +2090,30 @@ function fillPlanets(){
     c1.appendChild(d);
   });
   if(curFront!=='') buildSectorCol(); else { $('#pc2').innerHTML=''; $('#pc3').innerHTML=''; }
-  updatePbtn();
+  updatePbtn(); pStat();
 }
 function buildSectorCol(){
   const c2=$('#pc2'); c2.innerHTML='';
-  const ps=planets.filter(p=> curFront ? p.f===curFront : !p.f);
+  const ps = curFront==='*' ? planets : (curFront ? planets.filter(p=>p.f===curFront) : planets.filter(p=>!p.f));
   const by={};
   ps.forEach(p=>{ const k=p.s||''; (by[k]=by[k]||[]).push(p); });
   const list=Object.keys(by).map(k=>({k, tot: by[k].reduce((a,b)=>a+(b.pc||0),0), n: by[k].length}));
   list.sort((a,b)=> b.tot-a.tot || a.k.localeCompare(b.k));
   list.forEach(o=>{
-    const sample=by[o.k][0];
+    const sample=by[o.k][0], group=by[o.k];
+    const checked=group.every(p=>draftPlanet.has(p.i));
+    const partial=!checked && group.some(p=>draftPlanet.has(p.i));
     const d=document.createElement('div');
-    d.className='pitem'+(curSector===o.k?' on':'');
-    d.innerHTML='<span>'+sName(o.k, sample.sz)+'</span><span class="pc'+(o.tot>0?' warm':'')+'">'+fmt(o.tot)+'</span>';
+    d.className='pitem'+(curSector===o.k?' on':'')+(checked?' sel':'');
+    const cb=document.createElement('input');
+    cb.type='checkbox'; cb.checked=checked; cb.indeterminate=partial;
+    cb.onclick=(e)=>{ e.stopPropagation(); toggleSector(group, cb.checked); };
+    d.appendChild(cb);
+    const nm=document.createElement('span');
+    nm.className='pname'; nm.textContent=sName(o.k, sample.sz);
+    const pc=document.createElement('span');
+    pc.className='pc'+(o.tot>0?' warm':''); pc.textContent=fmt(o.tot);
+    d.appendChild(nm); d.appendChild(pc);
     d.onclick=(e)=>{ e.stopPropagation(); curSector=o.k; buildPlanetCol(); };
     c2.appendChild(d);
   });
@@ -1686,26 +2123,57 @@ function buildPlanetCol(){
   if(!curSector) return;
   const ps=planets.filter(p=>(p.s||'')===curSector).sort((a,b)=> (b.pc||0)-(a.pc||0));
   ps.forEach(p=>{
+    const on=draftPlanet.has(p.i);
     const d=document.createElement('div');
-    d.className='pitem'+(String(planetSel)===String(p.i)?' on':'');
+    d.className='pitem'+(on?' sel':'');
+    const cb=document.createElement('input');
+    cb.type='checkbox'; cb.checked=on;
+    cb.onclick=(e)=>{ e.stopPropagation(); togglePlanet(p.i, cb.checked); };
+    d.appendChild(cb);
     const own = p.o==='Humans'?'人类':(p.o==='Terminids'?'虫族':(p.o==='Automaton'||p.o==='Automatons'?'机器人':(p.o==='Illuminate'?'光能族':'')));
-    d.innerHTML='<span>'+pName(p)+(own?'<span style="color:#5f6a78"> · '+own+'</span>':'')+'</span>'
-               +'<span class="pc'+(p.pc>0?' warm':'')+'">'+fmt(p.pc)+'</span>';
-    d.onclick=(e)=>{ e.stopPropagation(); planetSel=p.i; updatePbtn(); closePPanel(); fillPlanets(); load(); };
+    const nm=document.createElement('span');
+    nm.className='pname';
+    nm.innerHTML=pName(p)+(own?'<span style="color:#5f6a78"> · '+own+'</span>':'');
+    const pc=document.createElement('span');
+    pc.className='pc'+(p.pc>0?' warm':''); pc.textContent=fmt(p.pc);
+    d.appendChild(nm); d.appendChild(pc);
+    d.onclick=(e)=>{ e.stopPropagation(); cb.checked=!cb.checked; togglePlanet(p.i, cb.checked); };
     c3.appendChild(d);
   });
 }
-function fillDiff(){
-  const ds=$('#diff'); const curd=ds.value;
-  ds.innerHTML='';
-  const d0=document.createElement('option'); d0.value=''; d0.textContent=T('diff'); ds.appendChild(d0);
-  const d1=document.createElement('option'); d1.value='0'; d1.textContent=T('diff0'); ds.appendChild(d1);
-  const names = LANG==='zh'?DIFFCN:DIFFEN;
-  for(let i=1;i<=10;i++){
-    const o=document.createElement('option'); o.value=i; o.textContent=names[i]; ds.appendChild(o);
-  }
-  ds.value=curd;
+/* ---- 难度多选 ---- */
+let diffSet=new Set(), draftDiff=new Set();
+function diffName(v){ return v===0?T('diff0'):((LANG==='zh'?DIFFCN:DIFFEN)[v]||v); }
+function updateDBtn(){
+  const b=$('#dbtn');
+  if(!diffSet.size){ b.innerHTML='<span>'+T('diff')+'</span> ▾'; b.classList.remove('on'); return; }
+  b.classList.add('on');
+  b.innerHTML='<span>'+T('diff_btn')+'：'+diffSet.size+'</span> ▾';
 }
+function openDPanel(){
+  draftDiff=new Set(diffSet);
+  buildDiffPanel();
+  $('#dpanel').classList.add('open');
+}
+function buildDiffPanel(){
+  const box=$('#dgrid'); box.innerHTML='';
+  const c={}; rooms.forEach(r=>{ c[r.diff]=(c[r.diff]||0)+1; });
+  [0,1,2,3,4,5,6,7,8,9,10].forEach(v=>{
+    const el=document.createElement('label');
+    el.className='eitem'+(draftDiff.has(v)?' on':'');
+    const cb=document.createElement('input');
+    cb.type='checkbox'; cb.checked=draftDiff.has(v);
+    cb.onchange=()=>{
+      if(cb.checked) draftDiff.add(v); else draftDiff.delete(v);
+      el.classList.toggle('on', cb.checked);
+    };
+    const nm=document.createElement('span'); nm.className='ename'; nm.textContent=diffName(v);
+    const pc=document.createElement('span'); pc.className='ec'; pc.textContent=c[v]||0;
+    el.appendChild(cb); el.appendChild(nm); el.appendChild(pc);
+    box.appendChild(el);
+  });
+}
+function applyDiff(){ diffSet=new Set(draftDiff); updateDBtn(); closePanels(''); load(); }
 function ago(s){
   if(s==null) return '-';
   if(s<60) return s+T('ago_s');
@@ -1720,7 +2188,9 @@ function pingCell(v){
 async function selfInfo(){
   try{
     const d=await (await fetch('/api/self')).json();
-    selfLobby=d.lobby||'';
+    const lid=d.lobby||'';
+    if(lid!==selfLobby) selfRoom=null;
+    selfLobby=lid;
     $('#mine').textContent = selfLobby ? (T('mine')+selfLobby.slice(-6)) : T('no_mine');
   }catch(e){}
 }
@@ -1747,15 +2217,16 @@ function stopProgress(){
 }
 async function load(){
   const q=new URLSearchParams();
-  if(planetSel!=='') q.set('planets', planetSel);
+  if(planetSet.size) q.set('planets', [...planetSet].join(','));
   if(fronts.size) q.set('fronts', [...fronts].join(','));
   if(regions.size) q.set('regions', [...regions].join(','));
-  if($('#diff').value!=='') q.set('diff',$('#diff').value);
+  if(diffSet.size) q.set('diffs', [...diffSet].join(','));
   q.set('nosession', chipOn('c-nosession')?'1':'0');
   q.set('public', chipOn('c-public')?'1':'0');
   if(osSel.size) q.set('plat', [...osSel].join(','));
   q.set('hidefull', chipOn('c-hidefull')?'1':'0');
   $('#state').textContent=T('state_query'); $('#err').innerHTML='';
+  loadTime='';
   startProgress();
   await selfInfo();
   try{
@@ -1764,11 +2235,37 @@ async function load(){
     stopProgress();
     if(!d.ok){ $('#err').innerHTML='<div class="err">'+d.error+'</div>'; $('#state').textContent=T('state_fail'); return; }
     rooms=d.rooms;
+    warReady=!!d.war;
+    loadTime=new Date().toLocaleTimeString();
     render();
-    $('#state').innerHTML='<span class="ok">'+d.count+' '+T('state_rooms')+'</span> · '+new Date().toLocaleTimeString();
+    watchEnrich();
     $('#note').textContent = T('note_scan').replace('{n}',d.queried||1)
         .replace('{got}',d.scanned_ids||d.count).replace('{kept}',d.count) + ' ' + T('note');
   }catch(e){ stopProgress(); $('#err').innerHTML='<div class="err">'+e+'</div>'; }
+}
+/* 平台/房主名在后台补：每 0.9s 拉增量，变了才重排 */
+let enrichTimer=null;
+function applyEnrich(items){
+  let n=0;
+  rooms.forEach(r=>{
+    const v=items[r.lobby];
+    if(!v) return;
+    if(v[0] && r.platform!==v[0]){ r.platform=v[0]; n++; }
+    if(v[1] && r.host_name!==v[1]){ r.host_name=v[1]; n++; }
+  });
+  return n;
+}
+function watchEnrich(){
+  if(enrichTimer){ clearInterval(enrichTimer); enrichTimer=null; }
+  let ticks=0;
+  enrichTimer=setInterval(async()=>{
+    ticks++;
+    try{
+      const d=await (await fetch('/api/enrich')).json();
+      if(applyEnrich(d.items||{})) render();
+      if(!d.running || ticks>80){ clearInterval(enrichTimer); enrichTimer=null; }
+    }catch(e){ if(ticks>10){ clearInterval(enrichTimer); enrichTimer=null; } }
+  }, 900);
 }
 function pvTxt(v){ return v===0?T('pv_public'):(v===1?T('pv_friend'):(v===2?T('pv_private'):T('pv_unknown'))); }
 function pvCls(v){ return v===0?'pv-pub':(v===1?'pv-fri':(v===2?'pv-pri':'pv-unk')); }
@@ -1806,11 +2303,17 @@ function misCell(r){
 function render(){
   rebuildMissionMap();
   if($('#mpanel').classList.contains('open')) buildMissionPanel(false);
+  buildEnvPanel();
+  buildVarPanel();
   const PRIVATE_ON = chipOn('c-private');
+  const selfSrc=rooms.find(r=>r.lobby===selfLobby);
+  if(selfSrc) selfRoom=selfSrc;
   let rows=rooms.slice();
-  if(PRIVATE_ON) rows=rows.filter(r=>r.host_name);
+  if(PRIVATE_ON) rows=rows.filter(r=>r.kind==='steam');      // 私服 = Steam 直连房（跨平台关）
   if(chipOn('c-sos')) rows=rows.filter(r=>r.sos);
   if(missionSel.size) rows=rows.filter(r=>r.mission_name && missionSel.has(r.mission_name));
+  if(envSel.size) rows=rows.filter(r=>(r.map_types||[]).some(k=>envSel.has(k)));
+  if(varSel.size) rows=rows.filter(r=>(r.variants||[]).some(k=>varSel.has(k)));
   const f=KEYVAL[sortKey]||KEYVAL.ping;
   rows.sort((a,b)=>{
     const x=f(a), y=f(b);
@@ -1818,6 +2321,12 @@ function render(){
     return (x<y?-1:1)*sortDir;
   });
   const arrow=k=>sortKey===k?(' <span class="arrow">'+(sortDir>0?'▲':'▼')+'</span>'):'';
+  if(selfLobby){
+    const pin=rows.find(r=>r.lobby===selfLobby)||selfRoom;
+    if(pin) rows=[pin].concat(rows.filter(r=>r!==pin));
+  }
+  if(loadTime) $('#state').innerHTML='<span class="ok">'+rows.length+' '+T('state_rooms')+'</span>'
+      +' · '+loadTime;
   if(!rows.length){ $('#list').className='empty'; $('#list').textContent=T('empty'); return; }
   $('#list').className='';
   const diffs = LANG==='zh'?DIFFCN:DIFFEN;
@@ -1847,7 +2356,11 @@ function render(){
     const host=r.host_name?r.host_name:(r.kind==='steam'?'<span class="tag">—</span>':'<span class="tag">'+T('cross')+'</span>');
     const pname = (LANG==='zh' ? (r.planet_name_zh || r.planet_name) : r.planet_name) || T('no_planet');
     const sname = (LANG==='zh' ? (r.sector_zh || r.sector) : r.sector) || '';
-    h+='<tr><td><div class="planet">'+pname+'</div><div class="sub">'+sname+'</div></td>'
+    const ename = envLabel(r);
+    const vname = varLabel(r);
+    const sub = [sname, ename, vname].filter(Boolean).join(' · ');
+    const subtip = T('map_cell_tip') + ' / ' + T('var_cell_tip');
+    h+='<tr'+(mine?' class="mine"':'')+'><td><div class="planet">'+pname+'</div><div class="sub" title="'+subtip+'">'+sub+'</div></td>'
       +'<td><span class="fbadge '+fcls+'">'+ftxt+'</span></td>'
       +'<td><span class="diff d'+r.diff+(r.diff_guess?' guess':'')+'" title="'+(r.diff_guess?T('diff_guess_tip'):'')+'">'+(r.diff?diffs[r.diff]:T('diff0'))+(r.diff_guess?' *':'')+'</span></td>'
       +'<td class="num"><span class="bar"><i style="width:'+pct+'%"></i></span>'+r.members+' / '+(r.limit||4)+'</td>'
@@ -1877,7 +2390,12 @@ async function join(lobby,host,btn){
   for(let i=0;i<24;i++){
     await new Promise(r=>setTimeout(r,500));
     await selfInfo();
-    if(selfLobby===lobby){ btn.textContent=T('joined'); $('#state').innerHTML='<span class="ok">'+T('state_joined')+'</span>'; load(); return; }
+    if(selfLobby===lobby){
+      const found=rooms.find(r=>r.lobby===lobby);
+      if(found) selfRoom=found;
+      btn.textContent=T('joined'); $('#state').innerHTML='<span class="ok">'+T('state_joined')+'</span>';
+      load(); return;
+    }
   }
   btn.textContent=T('join'); btn.disabled=false;
   await fetch('/api/failed?lobby='+lobby+'&reason=timeout');
@@ -1886,16 +2404,29 @@ async function join(lobby,host,btn){
 }
 $('#quit').onclick=async()=>{ if(confirm(T('quit')+'?')){ try{ await fetch('/api/quit'); }catch(e){} window.close(); } };
 $('#refresh').onclick=load;
-$('#pbtn').onclick=e=>{ e.stopPropagation(); $('#ppanel').classList.toggle('open'); };
+$('#pbtn').onclick=e=>{
+  e.stopPropagation();
+  const p=$('#ppanel');
+  if(p.classList.contains('open')) p.classList.remove('open');
+  else { closePanels('ppanel'); openPPanel(); }
+};
+$('#pclear').onclick=e=>{ e.stopPropagation(); draftPlanet.clear(); fillPlanets(); };
+$('#papply').onclick=e=>{ e.stopPropagation(); applyPlanets(); };
+$('#dbtn').onclick=e=>{
+  e.stopPropagation();
+  const p=$('#dpanel');
+  if(p.classList.contains('open')) p.classList.remove('open');
+  else { closePanels('dpanel'); openDPanel(); }
+};
+$('#dapply').onclick=e=>{ e.stopPropagation(); applyDiff(); };
 document.addEventListener('click',e=>{ if(!document.getElementById('pdd').contains(e.target)) closePPanel(); });
-$('#diff').onchange=load;
 $('#lang').onclick=()=>{
   LANG = LANG==='zh'?'en':'zh';
   localStorage.setItem('hd2lb_lang', LANG);
-  applyI18n(); buildChips(); fillPlanets(); fillDiff(); render();
+  applyI18n(); buildChips(); fillPlanets(); updateDBtn(); render();
   paintVersion(VER);
 };
-applyI18n(); buildChips(); fillPlanets(); fillDiff(); render();
+applyI18n(); buildChips(); fillPlanets(); updateDBtn(); render();
 let VER=null;
 function paintVersion(v){
   const a=document.getElementById('newver'), up=document.getElementById('upgrade');
@@ -1939,12 +2470,10 @@ fetch('/api/preset').then(r=>r.json()).catch(()=>({})).then(p=>{
   PRESET=(p && typeof p==='object') ? p : {};
   return fetch('/api/planets');
 }).then(r=>r.json()).then(d=>{
-  planets=d.planets; fillPlanets(); fillDiff();
+  planets=d.planets; fillPlanets(); updateDBtn();
   for(let i=1;i<=10;i++){ if(!DIFFCN[i]) DIFFCN[i]=d.diff[i]; }
   if(PRESET && Object.keys(PRESET).length){       // 有预设就套用，并按它直接搜
     applyPreset(PRESET);
-    fillDiff();
-    if(PRESET.diff!=null) $('#diff').value=String(PRESET.diff);
   }
   load();
 });
@@ -1995,6 +2524,10 @@ class Handler(BaseHTTPRequestHandler):
                     .replace("__DIFFEN__", json.dumps(DIFF_EN, ensure_ascii=False))
                     .replace("__REGIONCN__", json.dumps(REGION_CN, ensure_ascii=False))
                     .replace("__REGIONEN__", json.dumps(REGION_EN, ensure_ascii=False))
+                    .replace("__ENVLABELS__", json.dumps(
+                        {str(k): list(v) for k, v in ENV_LABELS.items()}, ensure_ascii=False))
+                    .replace("__VARLABELS__", json.dumps(
+                        {str(k): list(v) for k, v in VAR_LABELS.items()}, ensure_ascii=False))
                     .replace("__I18N__", json.dumps(I18N, ensure_ascii=False)))
             html = html.replace("<script>", "<script>window.I18N=" + json.dumps(I18N, ensure_ascii=False) + ";\n", 1)
             return self._send(200, html, "text/html; charset=utf-8")
@@ -2022,7 +2555,11 @@ class Handler(BaseHTTPRequestHandler):
                  "sectors": SECTORS_ZH, "updated": updated}, ensure_ascii=False))
         if u.path == "/api/lobbies":
             planets = q.get("planets", [""])[0]
-            diff = q.get("diff", [None])[0]
+            diffs_raw = q.get("diffs", [None])[0]
+            if diffs_raw is None:                      # 兼容旧链接：单个 diff
+                diffs_raw = q.get("diff", [None])[0]
+            diffs = sorted({int(x) for x in str(diffs_raw).split(",")
+                            if str(x).strip().isdigit()}) if diffs_raw not in (None, "") else None
             nosession = q.get("nosession", ["1"])[0] != "0"
             public_only = q.get("public", ["1"])[0] != "0"
             hidefull = q.get("hidefull", ["0"])[0] == "1"
@@ -2033,7 +2570,7 @@ class Handler(BaseHTTPRequestHandler):
             oses = [x for x in q.get("plat", [""])[0].split(",") if x in ("steam", "psn", "xbox")]
             plist = [x for x in planets.split(",") if x.strip().isdigit()] if planets else None
             res = STEAM.search(planets=plist, fronts=fronts, regions=regions, plats=plats,
-                               diff=int(diff) if diff not in (None, "") else None,
+                               diffs=diffs,
                                hide_nosession=nosession, hide_full=hidefull,
                                public_only=public_only, platforms=oses or None)
             if res.get("ok") and FAILS:
@@ -2061,6 +2598,19 @@ class Handler(BaseHTTPRequestHandler):
             p = dict(PROGRESS)
             p["elapsed"] = round(time.time() - p["started"], 1) if p.get("started") else 0
             return self._send(200, json.dumps(p, ensure_ascii=False))
+        if u.path == "/api/enrich":
+            items = {}
+            for lid, r in (STEAM.rooms if STEAM else {}).items():
+                if r.get("platform") or r.get("host_name"):
+                    items[lid] = [r.get("platform") or "", r.get("host_name") or ""]
+            return self._send(200, json.dumps(
+                {"running": ENRICH["running"], "scanned": ENRICH["scanned"],
+                 "total": ENRICH["total"], "items": items}, ensure_ascii=False))
+        if u.path == "/api/war":
+            return self._send(200, json.dumps(
+                {"war": WAR.war if WAR else 0,
+                 "planets": len(WAR.planets) if WAR else 0,
+                 "err": (WAR.err if WAR else "no WAR")}, ensure_ascii=False))
         if u.path == "/api/self":
             d = STEAM.self_lobby()
             d["v"] = VERSION

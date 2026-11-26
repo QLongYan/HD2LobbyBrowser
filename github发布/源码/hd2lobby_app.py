@@ -132,11 +132,14 @@ def start_server():
 
 
 def main():
+    core.cleanup_old()                  # 清掉上次升级留下的 .old
     core.STEAM = core.SteamLobbies()
     core.LATENCY = core.Latency()
     core.STATS = core.PlanetStats()
     core.FAILS = core.JoinFailures()
     core.PLATFORM = core.PlatformIndex(core.STEAM)
+    core.WAR = core.WarEffects()
+    core.WAR.warm()                     # 星球变种（战争状态），后台每 5 分钟刷一次
     if core.STEAM.ok:
         core.LATENCY.warm()
         core.STATS.warm()

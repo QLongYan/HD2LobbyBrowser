@@ -1,0 +1,11 @@
+# 升级源配置（V21）
+#
+# 默认留空：程序走 GitHub Release
+#   https://github.com/QLongYan/HD2LobbyBrowser/releases/latest
+#
+# 想用自己的下载源：第一行写一个 JSON 地址（http/https）
+#   https://你的地址/version.json
+# 该 JSON 内容：
+#   {"latest": 22, "url": "公告页", "file": "https://你的直链/HD2LobbyBrowser.exe"}
+#
+# 读不到时会自动回退 GitHub，所以留空最省事。

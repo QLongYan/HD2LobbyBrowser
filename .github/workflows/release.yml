@@ -83,8 +83,11 @@ jobs:
             --add-data "源码/planets_zh.json;." `
             --add-data "源码/sectors_zh.json;." `
             --add-data "源码/mission_names.json;." `
+            --add-data "源码/mission_names_en.json;." `
             --add-data "源码/factions.json;." `
             --add-data "源码/sdr_pops.json;." `
+            --add-data "源码/env_types.json;." `
+            --add-data "源码/variant_types.json;." `
             --collect-all webview --collect-all clr_loader --collect-all pythonnet `
             --hidden-import webview.platforms.edgechromium "源码/hd2lobby_app.py"
           if (!(Test-Path "dist/HD2LobbyBrowser.exe")) { throw "打包失败：没生成 exe" }
@@ -92,7 +95,8 @@ jobs:
           $stage = Join-Path $env:RUNNER_TEMP "pkg"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item "dist/HD2LobbyBrowser.exe" "$stage/HD2LobbyBrowser.exe" -Force
-          Copy-Item "源码/*.json" "$stage/" -Force
+          Copy-Item "使用说明.txt" "$stage/使用说明.txt" -Force
+          Copy-Item "update_url.txt" "$stage/update_url.txt" -Force
 
           Copy-Item "$stage/HD2LobbyBrowser.exe" "$env:GITHUB_WORKSPACE/HD2LobbyBrowser.exe" -Force
           $zip = "$env:GITHUB_WORKSPACE/HD2LobbyBrowser-V$env:VER.zip"
